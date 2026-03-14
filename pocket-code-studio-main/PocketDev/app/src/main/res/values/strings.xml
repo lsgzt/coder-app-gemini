@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PocketDev</string>
+    <string name="app_description">Mobile coding workspace for students</string>
+
+    <!-- Navigation -->
+    <string name="nav_editor">Editor</string>
+    <string name="nav_projects">Projects</string>
+    <string name="nav_examples">Examples</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Editor -->
+    <string name="run_code">Run Code</string>
+    <string name="clear_output">Clear Output</string>
+    <string name="save_project">Save Project</string>
+    <string name="new_file">New File</string>
+    <string name="language_selector">Select Language</string>
+    <string name="ai_features">AI Features</string>
+    <string name="fix_bug">Fix Bug</string>
+    <string name="explain_code">Explain Code</string>
+    <string name="improve_code">Improve Code</string>
+    <string name="find_replace">Find &amp; Replace</string>
+    <string name="preview_html">Preview HTML</string>
+
+    <!-- Output -->
+    <string name="output_label">Output</string>
+    <string name="running">Running…</string>
+    <string name="execution_success">Executed successfully</string>
+    <string name="execution_error">Execution error</string>
+    <string name="no_output">No output</string>
+
+    <!-- Projects -->
+    <string name="my_projects">My Projects</string>
+    <string name="new_project">New Project</string>
+    <string name="search_projects">Search projects…</string>
+    <string name="no_projects">No projects yet</string>
+    <string name="delete_project">Delete Project</string>
+    <string name="duplicate_project">Duplicate</string>
+    <string name="open_project">Open</string>
+
+    <!-- Examples -->
+    <string name="examples">Examples</string>
+    <string name="load_example">Load Example</string>
+    <string name="preview">Preview</string>
+
+    <!-- Settings -->
+    <string name="settings">Settings</string>
+    <string name="api_key">Groq API Key</string>
+    <string name="theme">Theme</string>
+    <string name="font_size">Font Size</string>
+    <string name="tab_size">Tab Size</string>
+    <string name="auto_save">Auto Save</string>
+    <string name="autocomplete">Autocomplete</string>
+    <string name="line_numbers">Line Numbers</string>
+    <string name="word_wrap">Word Wrap</string>
+    <string name="reset_defaults">Reset to Defaults</string>
+
+    <!-- AI -->
+    <string name="ai_analyzing">AI is analyzing your code…</string>
+    <string name="apply_fix">Apply Fix</string>
+    <string name="apply_code">Apply Code</string>
+    <string name="no_api_key">Please set your Groq API key in Settings to use AI features.</string>
+    <string name="no_internet">No internet connection. Please check your network.</string>
+
+    <!-- Errors -->
+    <string name="error_empty_code">Please write some code first!</string>
+    <string name="error_save_failed">Failed to save project</string>
+    <string name="error_load_failed">Failed to load project</string>
+
+    <!-- File provider -->
+    <string name="file_provider_authority">com.pocketdev.app.fileprovider</string>
+</resources>

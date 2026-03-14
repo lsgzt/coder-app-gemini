@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark theme (default) -->
+    <color name="primary">#4FC3F7</color>
+    <color name="on_primary">#003E5C</color>
+    <color name="primary_container">#004D6E</color>
+    <color name="on_primary_container">#B3E5FC</color>
+    <color name="secondary">#81C784</color>
+    <color name="background">#0D1117</color>
+    <color name="surface">#161B22</color>
+    <color name="on_surface">#E6EDF3</color>
+    <color name="on_primary_dark">#FFFFFF</color>
+
+    <!-- Syntax highlighting colors -->
+    <color name="syntax_keyword">#569CD6</color>
+    <color name="syntax_string">#CE9178</color>
+    <color name="syntax_comment">#6A9955</color>
+    <color name="syntax_number">#B5CEA8</color>
+    <color name="syntax_function">#DCDCAA</color>
+    <color name="syntax_type">#4EC9B0</color>
+    <color name="syntax_operator">#D4D4D4</color>
+    <color name="syntax_default">#CDD9E5</color>
+
+    <!-- Language badge colors -->
+    <color name="lang_python">#3572A5</color>
+    <color name="lang_javascript">#F7DF1E</color>
+    <color name="lang_html">#E34C26</color>
+    <color name="lang_css">#563D7C</color>
+    <color name="lang_java">#B07219</color>
+    <color name="lang_cpp">#F34B7D</color>
+    <color name="lang_kotlin">#7F52FF</color>
+    <color name="lang_json">#292929</color>
+</resources>
