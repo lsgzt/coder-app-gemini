@@ -44,6 +44,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _htmlContent = MutableStateFlow<String?>(null)
     val htmlContent: StateFlow<String?> = _htmlContent.asStateFlow()
 
+    private val _stdInput = MutableStateFlow("")
+    val stdInput: StateFlow<String> = _stdInput.asStateFlow()
+
+    fun updateStdInput(input: String) {
+        _stdInput.value = input
+    }
+
     // AI state
     private val _aiState = MutableStateFlow<UiState<AiResult>>(UiState.Idle)
     val aiState: StateFlow<UiState<AiResult>> = _aiState.asStateFlow()
@@ -111,6 +118,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun runCode() {
         val code = _currentCode.value
         val language = _currentLanguage.value
+        val input = _stdInput.value
 
         if (code.isBlank()) {
             _executionState.value = UiState.Error("No code to execute. Write some code first!")
@@ -128,7 +136,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             _executionState.value = UiState.Loading
 
-            val result = executionManager.execute(code, language)
+            val result = executionManager.execute(code, language, input)
 
             if (language == Language.HTML && result.isSuccess) {
                 _htmlContent.value = result.output
@@ -212,6 +220,37 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun improveCode() {
         callAiFeature { code, language, key, model ->
             groqRepository.improveCode(code, language, key, model)
+        }
+    }
+
+    fun writeCodeWithAi(prompt: String) {
+        val code = _currentCode.value
+        val language = _currentLanguage.value
+
+        val apiKey = secureStorage.groqApiKey
+        if (apiKey.isBlank()) {
+            _aiState.value = UiState.Error(
+                "Groq API key not set.\nPlease add your API key in Settings to use AI features."
+            )
+            return
+        }
+
+        if (!NetworkUtils.isOnline(context)) {
+            _aiState.value = UiState.Error(
+                "No internet connection.\nPlease connect to the internet to use AI features."
+            )
+            return
+        }
+
+        viewModelScope.launch {
+            _aiState.value = UiState.Loading
+            val model = prefsManager.aiModel.first()
+            val result = groqRepository.modifyCode(prompt, code, language, apiKey, model)
+            if (result.isSuccess && result.correctedCode != null) {
+                applyAiCode(result.correctedCode)
+            } else {
+                _aiState.value = UiState.Error(result.errorMessage ?: "AI request failed to generate code block")
+            }
         }
     }
 

@@ -12,11 +12,11 @@ class ExecutionManager(private val context: Context) {
     private val javascriptEngine: JavaScriptEngine by lazy { JavaScriptEngine() }
     private val htmlEngine: HtmlEngine by lazy { HtmlEngine(context) }
 
-    suspend fun execute(code: String, language: Language): ExecutionResult {
+    suspend fun execute(code: String, language: Language, stdInput: String = ""): ExecutionResult {
         return withContext(Dispatchers.IO) {
             when (language) {
-                Language.PYTHON -> pythonEngine.execute(code)
-                Language.JAVASCRIPT -> javascriptEngine.execute(code)
+                Language.PYTHON -> pythonEngine.execute(code, stdInput)
+                Language.JAVASCRIPT -> javascriptEngine.execute(code, stdInput)
                 Language.HTML -> htmlEngine.prepare(code)
                 else -> ExecutionResult(
                     output = "",

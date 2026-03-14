@@ -66,11 +66,12 @@ class GroqRepository {
         return callGroqWithRetry(prompt, apiKey, model)
     }
 
-    suspend fun generateCode(prompt: String, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+    suspend fun modifyCode(prompt: String, code: String, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
         val fullPrompt = buildString {
-            append("Generate ${language.displayName} code for the following request:\n\n")
-            append(prompt)
-            append("\n\nProvide clean, well-commented ${language.displayName} code with a brief explanation of how it works.")
+            append("You are an expert ${language.displayName} developer. I have the following code:\n\n")
+            append("```${language.displayName.lowercase()}\n$code\n```\n\n")
+            append("Please modify the code according to this request: $prompt\n\n")
+            append("Return ONLY the complete modified code inside a single code block. Do not include any other text, explanations, or markdown outside the code block. The code block must contain the full updated file so it can be directly pasted.")
         }
         return callGroqWithRetry(fullPrompt, apiKey, model)
     }

@@ -14,12 +14,12 @@ class JavaScriptEngine {
         private const val TIMEOUT_MS = 10_000L
     }
 
-    suspend fun execute(code: String): ExecutionResult {
+    suspend fun execute(code: String, stdInput: String? = null): ExecutionResult {
         val startTime = System.currentTimeMillis()
 
         return withTimeoutOrNull(TIMEOUT_MS) {
             try {
-                executeRhino(code, startTime)
+                executeRhino(code, startTime, stdInput)
             } catch (e: RhinoException) {
                 val executionTime = System.currentTimeMillis() - startTime
                 ExecutionResult(
@@ -46,7 +46,7 @@ class JavaScriptEngine {
         )
     }
 
-    private fun executeRhino(code: String, startTime: Long): ExecutionResult {
+    private fun executeRhino(code: String, startTime: Long, stdInput: String?): ExecutionResult {
         val outputBuilder = StringBuilder()
         val errorBuilder = StringBuilder()
 
@@ -57,8 +57,23 @@ class JavaScriptEngine {
 
             val scope = cx.initStandardObjects()
 
-            // Implement console object
+            // Escape stdInput for JavaScript string literal
+            val escapedInput = stdInput?.replace("\\", "\\\\")
+                ?.replace("\n", "\\n")
+                ?.replace("\r", "\\r")
+                ?.replace("\"", "\\\"") ?: ""
+
+            // Implement console object and prompt
             val consoleScript = """
+                var _inputLines = "$escapedInput" ? "$escapedInput".split('\n') : [];
+                var _inputIndex = 0;
+                function prompt(message) {
+                    if (message) console.log(message);
+                    if (_inputIndex < _inputLines.length && _inputLines[_inputIndex] !== undefined) {
+                        return _inputLines[_inputIndex++];
+                    }
+                    return null;
+                }
                 var console = {
                     _output: [],
                     log: function() {

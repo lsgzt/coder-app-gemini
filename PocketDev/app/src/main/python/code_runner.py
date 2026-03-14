@@ -14,12 +14,13 @@ class TimeoutException(Exception):
     pass
 
 
-def execute_code(code):
+def execute_code(code, std_input=""):
     """
     Execute Python code safely and return output/error as a dict.
 
     Args:
         code (str): Python code to execute
+        std_input (str): Standard input to provide to the script
 
     Returns:
         dict: {'output': str, 'error': str or None}
@@ -27,9 +28,11 @@ def execute_code(code):
     # Capture stdout and stderr
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
+    stdin_mock = io.StringIO(std_input)
 
     old_stdout = sys.stdout
     old_stderr = sys.stderr
+    old_stdin = sys.stdin
 
     output = ""
     error = None
@@ -37,6 +40,7 @@ def execute_code(code):
     try:
         sys.stdout = stdout_capture
         sys.stderr = stderr_capture
+        sys.stdin = stdin_mock
 
         # Create a clean namespace for execution
         exec_globals = {
@@ -66,6 +70,7 @@ def execute_code(code):
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
+        sys.stdin = old_stdin
 
     return {
         'output': output,

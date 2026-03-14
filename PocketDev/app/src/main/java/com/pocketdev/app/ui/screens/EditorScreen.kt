@@ -35,6 +35,14 @@ import com.pocketdev.app.viewmodels.EditorViewModel
 import com.pocketdev.app.viewmodels.SettingsViewModel
 import kotlinx.coroutines.launch
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.net.Uri
+import androidx.compose.ui.platform.LocalContext
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(
@@ -52,13 +60,17 @@ fun EditorScreen(
     val fontSize by settingsViewModel.fontSize.collectAsState()
     val lineNumbers by settingsViewModel.lineNumbers.collectAsState()
     val autocompleteEnabled by settingsViewModel.autocomplete.collectAsState()
+    val wordWrap by settingsViewModel.wordWrap.collectAsState()
 
     var showLanguageMenu by remember { mutableStateOf(false) }
     var showAiMenu by remember { mutableStateOf(false) }
+    var showAiWriteDialog by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var showNewFileDialog by remember { mutableStateOf(false) }
     var showHtmlPreview by remember { mutableStateOf(false) }
     var showFindReplace by remember { mutableStateOf(false) }
+    var showInputPanel by remember { mutableStateOf(false) }
+    val stdInput by viewModel.stdInput.collectAsState()
     var findText by remember { mutableStateOf("") }
     var replaceText by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -80,6 +92,58 @@ fun EditorScreen(
             showHtmlPreview = true
         }
     }
+
+    val context = LocalContext.current
+
+    val openDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri: Uri? ->
+            uri?.let {
+                try {
+                    context.contentResolver.openInputStream(it)?.use { inputStream ->
+                        val reader = BufferedReader(InputStreamReader(inputStream))
+                        val content = reader.readText()
+                        viewModel.updateCode(content)
+                        // Try to guess language from extension
+                        val path = it.path ?: ""
+                        val lang = when {
+                            path.endsWith(".py") -> Language.PYTHON
+                            path.endsWith(".js") -> Language.JAVASCRIPT
+                            path.endsWith(".html") -> Language.HTML
+                            path.endsWith(".css") -> Language.CSS
+                            path.endsWith(".java") -> Language.JAVA
+                            path.endsWith(".cpp") || path.endsWith(".cc") -> Language.CPP
+                            path.endsWith(".kt") -> Language.KOTLIN
+                            path.endsWith(".json") -> Language.JSON
+                            else -> null
+                        }
+                        if (lang != null) {
+                            viewModel.setLanguage(lang)
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Handle error
+                }
+            }
+        }
+    )
+
+    val createDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("*/*"),
+        onResult = { uri: Uri? ->
+            uri?.let {
+                try {
+                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                        val writer = OutputStreamWriter(outputStream)
+                        writer.write(code)
+                        writer.flush()
+                    }
+                } catch (e: Exception) {
+                    // Handle error
+                }
+            }
+        }
+    )
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -136,6 +200,13 @@ fun EditorScreen(
                             onDismissRequest = { showAiMenu = false }
                         ) {
                             DropdownMenuItem(
+                                text = { Text("✨ Write Code with AI") },
+                                onClick = {
+                                    showAiWriteDialog = true
+                                    showAiMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("🔧 Fix Bug") },
                                 onClick = {
                                     viewModel.fixBug()
@@ -186,6 +257,32 @@ fun EditorScreen(
                                 }
                             )
                             DropdownMenuItem(
+                                text = { Text("Save to Device") },
+                                leadingIcon = { Icon(Icons.Default.Download, null) },
+                                onClick = {
+                                    val ext = when (language) {
+                                        Language.PYTHON -> ".py"
+                                        Language.JAVASCRIPT -> ".js"
+                                        Language.HTML -> ".html"
+                                        Language.CSS -> ".css"
+                                        Language.JAVA -> ".java"
+                                        Language.CPP -> ".cpp"
+                                        Language.KOTLIN -> ".kt"
+                                        Language.JSON -> ".json"
+                                    }
+                                    createDocumentLauncher.launch("${projectName.ifBlank { "untitled" }}$ext")
+                                    showMoreMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Open from Device") },
+                                leadingIcon = { Icon(Icons.Default.Upload, null) },
+                                onClick = {
+                                    openDocumentLauncher.launch(arrayOf("*/*"))
+                                    showMoreMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("My Projects") },
                                 leadingIcon = { Icon(Icons.Default.FolderOpen, null) },
                                 onClick = {
@@ -198,6 +295,14 @@ fun EditorScreen(
                                 leadingIcon = { Icon(Icons.Default.FindReplace, null) },
                                 onClick = {
                                     showFindReplace = !showFindReplace
+                                    showMoreMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Standard Input") },
+                                leadingIcon = { Icon(Icons.Default.Keyboard, null) },
+                                onClick = {
+                                    showInputPanel = !showInputPanel
                                     showMoreMenu = false
                                 }
                             )
@@ -231,6 +336,7 @@ fun EditorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .imePadding()
         ) {
             // Find & Replace bar
             AnimatedVisibility(visible = showFindReplace) {
@@ -256,10 +362,54 @@ fun EditorScreen(
                     language = language,
                     fontSize = fontSize,
                     lineNumbers = lineNumbers,
+                    wordWrap = wordWrap,
                     autocompleteEnabled = autocompleteEnabled,
                     onCodeChange = viewModel::updateCode,
                     modifier = Modifier.fillMaxSize()
                 )
+            }
+
+            // Input Panel
+            AnimatedVisibility(visible = showInputPanel) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    tonalElevation = 2.dp
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Keyboard,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Standard Input",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.weight(1f))
+                            IconButton(onClick = { showInputPanel = false }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Close, "Close input panel", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = stdInput,
+                            onValueChange = viewModel::updateStdInput,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp, max = 120.dp),
+                            textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                            placeholder = { Text("Enter input for your script here...", style = TextStyle(fontSize = 13.sp)) },
+                            minLines = 3,
+                            maxLines = 5
+                        )
+                    }
+                }
             }
 
             // Output Panel
@@ -302,6 +452,38 @@ fun EditorScreen(
     }
 
     // Save Dialog
+    if (showAiWriteDialog) {
+        var prompt by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAiWriteDialog = false },
+            title = { Text("Write Code with AI") },
+            text = {
+                OutlinedTextField(
+                    value = prompt,
+                    onValueChange = { prompt = it },
+                    label = { Text("Describe what you want to build or change") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (prompt.isNotBlank()) {
+                            viewModel.writeCodeWithAi(prompt)
+                            showAiWriteDialog = false
+                        }
+                    }
+                ) {
+                    Text("Generate")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAiWriteDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     if (showSaveDialog) {
         SaveProjectDialog(
             currentName = projectName,
@@ -339,6 +521,7 @@ fun CodeEditor(
     language: Language,
     fontSize: Int,
     lineNumbers: Boolean,
+    wordWrap: Boolean = false,
     autocompleteEnabled: Boolean = true,
     onCodeChange: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -358,12 +541,13 @@ fun CodeEditor(
     val verticalScrollState = rememberScrollState()
 
     // Autocomplete state
-    var cursorPosition by remember { mutableIntStateOf(0) }
+    var selection by remember { mutableStateOf(androidx.compose.ui.text.TextRange(0)) }
     var showAutocomplete by remember { mutableStateOf(false) }
     var suggestions by remember { mutableStateOf<List<AutocompleteItem>>(emptyList()) }
 
     // Update suggestions when code changes
-    LaunchedEffect(code, cursorPosition, language, autocompleteEnabled) {
+    LaunchedEffect(code, selection, language, autocompleteEnabled) {
+        val cursorPosition = selection.start
         if (autocompleteEnabled && cursorPosition <= code.length) {
             val newSuggestions = AutocompleteEngine.getSuggestions(code, cursorPosition, language)
             suggestions = newSuggestions
@@ -379,7 +563,7 @@ fun CodeEditor(
             // Line numbers — same font size and line height as code, shared scroll
             if (lineNumbers) {
                 val lines = code.split("\n").size
-                val lineNumberWidth = (maxOf(lines, 1).toString().length * fontSize * 0.6 + 24).dp
+                val lineNumberWidth = (maxOf(lines, 1).toString().length * fontSize * 0.6 + 12).dp
                 val lineNumbersText = (1..maxOf(lines, 1)).joinToString("\n")
                 Column(
                     modifier = Modifier
@@ -387,7 +571,7 @@ fun CodeEditor(
                         .fillMaxHeight()
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                         .verticalScroll(verticalScrollState)
-                        .padding(start = 8.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                        .padding(start = 2.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                     horizontalAlignment = Alignment.End
                 ) {
                     Text(
@@ -405,17 +589,42 @@ fun CodeEditor(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .horizontalScroll(rememberScrollState())
+                    .let {
+                        if (!wordWrap) it.horizontalScroll(rememberScrollState()) else it
+                    }
             ) {
                 BasicTextField(
                     value = androidx.compose.ui.text.input.TextFieldValue(
                         text = code,
-                        selection = androidx.compose.ui.text.TextRange(cursorPosition.coerceIn(0, code.length))
+                        selection = androidx.compose.ui.text.TextRange(
+                            start = selection.start.coerceIn(0, code.length),
+                            end = selection.end.coerceIn(0, code.length)
+                        )
                     ),
                     onValueChange = { tfv ->
-                        cursorPosition = tfv.selection.start
-                        if (tfv.text != code) {
-                            onCodeChange(tfv.text)
+                        var newText = tfv.text
+                        var newSelection = tfv.selection
+                        var newCursor = newSelection.start
+                        
+                        // Auto-closing brackets
+                        if (newText.length == code.length + 1 && newCursor > 0) {
+                            val insertedChar = newText[newCursor - 1]
+                            val closingChar = when (insertedChar) {
+                                '(' -> ")"
+                                '{' -> "}"
+                                '[' -> "]"
+                                '"' -> "\""
+                                '\'' -> "'"
+                                else -> null
+                            }
+                            if (closingChar != null) {
+                                newText = newText.substring(0, newCursor) + closingChar + newText.substring(newCursor)
+                            }
+                        }
+                        
+                        selection = newSelection
+                        if (newText != code) {
+                            onCodeChange(newText)
                         }
                     },
                     modifier = Modifier
@@ -460,12 +669,13 @@ fun CodeEditor(
                                 .fillMaxWidth()
                                 .clickable {
                                     // Insert completion: replace the prefix with the full text
+                                    val cursorPosition = selection.start
                                     val prefix = getWordPrefixForCompletion(code, cursorPosition)
                                     val before = code.substring(0, cursorPosition - prefix.length)
                                     val after = code.substring(cursorPosition)
                                     val newCode = before + item.text + after
                                     onCodeChange(newCode)
-                                    cursorPosition = (cursorPosition - prefix.length + item.text.length)
+                                    selection = androidx.compose.ui.text.TextRange(cursorPosition - prefix.length + item.text.length + item.cursorOffset)
                                     showAutocomplete = false
                                 }
                                 .padding(horizontal = 12.dp, vertical = 6.dp),

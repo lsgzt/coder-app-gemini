@@ -20,14 +20,14 @@ class PythonEngine(private val context: Context) {
         }
     }
 
-    suspend fun execute(code: String): ExecutionResult = withContext(Dispatchers.IO) {
+    suspend fun execute(code: String, stdInput: String = ""): ExecutionResult = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
 
         return@withContext withTimeoutOrNull(TIMEOUT_MS) {
             try {
                 val py = Python.getInstance()
                 val codeRunner = py.getModule("code_runner")
-                val result = codeRunner.callAttr("execute_code", code)
+                val result = codeRunner.callAttr("execute_code", code, stdInput)
                 
                 val output = result.callAttr("get", "output")?.toString() ?: ""
                 val error = result.callAttr("get", "error")?.toString() ?: ""

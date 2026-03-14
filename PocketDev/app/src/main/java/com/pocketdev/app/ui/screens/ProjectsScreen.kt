@@ -43,6 +43,7 @@ fun ProjectsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .imePadding()
         ) {
             // Search bar
             OutlinedTextField(
