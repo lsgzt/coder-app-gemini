@@ -3,7 +3,7 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
-        maven("https://chaquo.com/maven")
+        maven { url 'https://chaquo.com/maven' }
     }
     resolutionStrategy {
         eachPlugin {
@@ -13,15 +13,16 @@ pluginManagement {
         }
     }
 }
+
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         google()
         mavenCentral()
-        maven("https://chaquo.com/maven")
-        maven("https://jitpack.io")
+        maven { url 'https://chaquo.com/maven' }
+        maven { url 'https://jitpack.io' }
     }
 }
 
 rootProject.name = "PocketDev"
-include(":app")
+include ':app'
