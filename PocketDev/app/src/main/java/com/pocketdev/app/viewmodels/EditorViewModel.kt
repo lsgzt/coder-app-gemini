@@ -36,7 +36,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         terminalManager = terminalManager,
         updateCode = { newCode -> updateCode(newCode) },
         getApiKey = {
-            secureStorage.getApiKey().first() ?: ""
+            secureStorage.groqApiKey
         }
     )
 
