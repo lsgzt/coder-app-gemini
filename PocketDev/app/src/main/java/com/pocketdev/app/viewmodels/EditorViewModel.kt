@@ -15,6 +15,11 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.first
 
+import com.pocketdev.app.execution.TerminalManager
+import com.pocketdev.app.execution.AIExecutionAgent
+import com.pocketdev.app.execution.TerminalMessage
+import com.pocketdev.app.execution.TerminalMessageType
+
 class EditorViewModel(application: Application) : AndroidViewModel(application) {
 
     private val context: Context = application.applicationContext
@@ -23,6 +28,17 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val executionManager = ExecutionManager(context)
     private val secureStorage = SecureStorage(context)
     private val prefsManager = PreferencesManager(context)
+
+    val terminalManager = TerminalManager()
+    private val aiExecutionAgent = AIExecutionAgent(
+        executionManager = executionManager,
+        groqRepository = groqRepository,
+        terminalManager = terminalManager,
+        updateCode = { newCode -> updateCode(newCode) },
+        getApiKey = {
+            secureStorage.getApiKey().first() ?: ""
+        }
+    )
 
     // Current editor state
     private val _currentCode = MutableStateFlow("")
@@ -121,12 +137,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val input = _stdInput.value
 
         if (code.isBlank()) {
-            _executionState.value = UiState.Error("No code to execute. Write some code first!")
+            terminalManager.appendError("No code to execute. Write some code first!")
             return
         }
 
         if (!executionManager.isExecutable(language)) {
-            _executionState.value = UiState.Error(
+            terminalManager.appendError(
                 "${language.displayName} execution is not supported.\n" +
                         "Executable languages: Python, JavaScript, HTML"
             )
@@ -134,15 +150,55 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         viewModelScope.launch {
-            _executionState.value = UiState.Loading
-
+            terminalManager.clearTerminal()
+            terminalManager.appendStatusMessage("Running script...")
+            
             val result = executionManager.execute(code, language, input)
 
-            if (language == Language.HTML && result.isSuccess) {
-                _htmlContent.value = result.output
+            if (result.isSuccess) {
+                terminalManager.appendOutput(result.output)
+                terminalManager.appendStatusMessage("Execution successful.")
+                if (language == Language.HTML) {
+                    _htmlContent.value = result.output
+                }
+            } else {
+                terminalManager.appendError(result.error ?: "Unknown error")
             }
-
+            
             _executionState.value = UiState.Success(result)
+        }
+    }
+
+    fun runWithAiFix() {
+        val code = _currentCode.value
+        val language = _currentLanguage.value
+        val input = _stdInput.value
+
+        if (code.isBlank()) {
+            terminalManager.appendError("No code to execute. Write some code first!")
+            return
+        }
+
+        if (!executionManager.isExecutable(language)) {
+            terminalManager.appendError(
+                "${language.displayName} execution is not supported.\n" +
+                        "Executable languages: Python, JavaScript, HTML"
+            )
+            return
+        }
+
+        viewModelScope.launch {
+            terminalManager.clearTerminal()
+            _executionState.value = UiState.Loading
+            val result = aiExecutionAgent.runWithAiFix(code, language, input)
+            if (result != null) {
+                if (language == Language.HTML && result.isSuccess) {
+                    _htmlContent.value = result.output
+                }
+                _executionState.value = UiState.Success(result)
+            } else {
+                _executionState.value = UiState.Idle
+            }
         }
     }
 
@@ -252,6 +308,65 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 _aiState.value = UiState.Error(result.errorMessage ?: "AI request failed to generate code block")
             }
         }
+    }
+
+    fun editCodeWithAi(prompt: String) {
+        val code = _currentCode.value
+        val language = _currentLanguage.value
+
+        val apiKey = secureStorage.groqApiKey
+        if (apiKey.isBlank()) {
+            _aiState.value = UiState.Error(
+                "Groq API key not set.\nPlease add your API key in Settings to use AI features."
+            )
+            return
+        }
+
+        if (!NetworkUtils.isOnline(context)) {
+            _aiState.value = UiState.Error(
+                "No internet connection.\nPlease connect to the internet to use AI features."
+            )
+            return
+        }
+
+        viewModelScope.launch {
+            _aiState.value = UiState.Loading
+            val model = prefsManager.aiModel.first()
+            val result = groqRepository.editCode(prompt, code, language, apiKey, model)
+            if (result.isSuccess && result.correctedCode != null && result.editStart != null && result.editEnd != null) {
+                _aiState.value = UiState.Success(result)
+            } else {
+                _aiState.value = UiState.Error(result.errorMessage ?: "AI response did not contain EDIT_START and EDIT_END")
+            }
+        }
+    }
+
+    fun applyAiEdit(result: AiResult) {
+        val currentCode = _currentCode.value
+        val lines = currentCode.lines().toMutableList()
+        
+        val startLine = result.editStart ?: return
+        val endLine = result.editEnd ?: return
+        val newCode = result.correctedCode ?: return
+        
+        // Convert 1-based line numbers to 0-based indices
+        val startIndex = (startLine - 1).coerceIn(0, lines.size)
+        val endIndex = (endLine - 1).coerceIn(0, lines.size)
+        
+        if (startIndex <= endIndex) {
+            // Remove the old lines
+            for (i in endIndex downTo startIndex) {
+                if (i < lines.size) {
+                    lines.removeAt(i)
+                }
+            }
+        }
+        // Insert the new code
+        lines.add(startIndex, newCode)
+        
+        _currentCode.value = lines.joinToString("\n")
+        saveProject()
+        dismissAiResult()
     }
 
     private fun callAiFeature(

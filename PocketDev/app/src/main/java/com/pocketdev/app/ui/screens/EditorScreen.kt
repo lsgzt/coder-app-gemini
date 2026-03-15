@@ -65,11 +65,13 @@ fun EditorScreen(
     var showLanguageMenu by remember { mutableStateOf(false) }
     var showAiMenu by remember { mutableStateOf(false) }
     var showAiWriteDialog by remember { mutableStateOf(false) }
+    var showAiEditDialog by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var showNewFileDialog by remember { mutableStateOf(false) }
     var showHtmlPreview by remember { mutableStateOf(false) }
     var showFindReplace by remember { mutableStateOf(false) }
     var showInputPanel by remember { mutableStateOf(false) }
+    var showTerminal by remember { mutableStateOf(false) }
     val stdInput by viewModel.stdInput.collectAsState()
     var findText by remember { mutableStateOf("") }
     var replaceText by remember { mutableStateOf("") }
@@ -191,6 +193,11 @@ fun EditorScreen(
                         }
                     }
 
+                    // Terminal Toggle
+                    IconButton(onClick = { showTerminal = !showTerminal }) {
+                        Icon(Icons.Default.Terminal, "Toggle Terminal", tint = if (showTerminal) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+                    }
+
                     // AI Features
                     Box {
                         IconButton(onClick = { showAiMenu = true }) {
@@ -204,6 +211,13 @@ fun EditorScreen(
                                 text = { Text("✨ Write Code with AI") },
                                 onClick = {
                                     showAiWriteDialog = true
+                                    showAiMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("📝 Edit Code with AI") },
+                                onClick = {
+                                    showAiEditDialog = true
                                     showAiMenu = false
                                 }
                             )
@@ -324,11 +338,26 @@ fun EditorScreen(
         },
         floatingActionButton = {
             if (language in Language.executableLanguages()) {
-                FloatingActionButton(
-                    onClick = { viewModel.runCode() },
-                    containerColor = MaterialTheme.colorScheme.primary
-                ) {
-                    Icon(Icons.Default.PlayArrow, "Run Code")
+                Column(horizontalAlignment = Alignment.End) {
+                    SmallFloatingActionButton(
+                        onClick = { 
+                            showTerminal = true
+                            viewModel.runWithAiFix() 
+                        },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    ) {
+                        Icon(Icons.Default.AutoFixHigh, "Run with AI Fix")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FloatingActionButton(
+                        onClick = { 
+                            showTerminal = true
+                            viewModel.runCode() 
+                        },
+                        containerColor = MaterialTheme.colorScheme.primary
+                    ) {
+                        Icon(Icons.Default.PlayArrow, "Run Code")
+                    }
                 }
             }
         }
@@ -414,16 +443,16 @@ fun EditorScreen(
                 }
             }
 
-            // Output Panel
+            // Terminal Panel
             AnimatedVisibility(
-                visible = executionState !is UiState.Idle,
+                visible = showTerminal,
                 enter = slideInVertically(initialOffsetY = { it }),
                 exit = slideOutVertically(targetOffsetY = { it })
             ) {
-                OutputPanel(
-                    executionState = executionState,
-                    language = language,
-                    onClear = viewModel::clearOutput,
+                TerminalPanel(
+                    terminalManager = viewModel.terminalManager,
+                    onClear = { viewModel.terminalManager.clearTerminal() },
+                    onClose = { showTerminal = false },
                     onShowHtml = if (language == Language.HTML && htmlContent != null) {
                         { showHtmlPreview = true }
                     } else null
@@ -436,11 +465,19 @@ fun EditorScreen(
     if (aiState is UiState.Loading) {
         AiLoadingDialog()
     } else if (aiState is UiState.Success) {
+        val result = (aiState as UiState.Success<AiResult>).data
         AiResultDialog(
-            result = (aiState as UiState.Success<AiResult>).data,
+            result = result,
             language = language,
-            onApply = { code -> viewModel.applyAiCode(code) },
-            onDismiss = viewModel::dismissAiResult
+            onApply = { 
+                if (result.editStart != null && result.editEnd != null) {
+                    viewModel.applyAiEdit(result)
+                } else {
+                    viewModel.applyAiCode(it)
+                }
+            },
+            onDismiss = viewModel::dismissAiResult,
+            currentCode = code
         )
     } else if (aiState is UiState.Error) {
         AlertDialog(
@@ -482,6 +519,38 @@ fun EditorScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showAiWriteDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showAiEditDialog) {
+        var prompt by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAiEditDialog = false },
+            title = { Text("Edit Code with AI") },
+            text = {
+                OutlinedTextField(
+                    value = prompt,
+                    onValueChange = { prompt = it },
+                    label = { Text("Describe what you want to modify") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (prompt.isNotBlank()) {
+                            viewModel.editCodeWithAi(prompt)
+                            showAiEditDialog = false
+                        }
+                    }
+                ) {
+                    Text("Edit")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAiEditDialog = false }) { Text("Cancel") }
             }
         )
     }
@@ -745,18 +814,26 @@ private fun getWordPrefixForCompletion(code: String, cursorPos: Int): String {
 }
 
 @Composable
-fun OutputPanel(
-    executionState: UiState<ExecutionResult>,
-    language: Language,
+fun TerminalPanel(
+    terminalManager: com.pocketdev.app.execution.TerminalManager,
     onClear: () -> Unit,
+    onClose: () -> Unit,
     onShowHtml: (() -> Unit)?
 ) {
-    val maxHeight = 200.dp
+    val maxHeight = 250.dp
+    val messages by terminalManager.messages.collectAsState()
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            scrollState.animateScrollTo(scrollState.maxValue)
+        }
+    }
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = maxHeight),
+            .heightIn(min = 100.dp, max = maxHeight),
         color = MaterialTheme.colorScheme.surfaceVariant,
         tonalElevation = 4.dp
     ) {
@@ -776,7 +853,7 @@ fun OutputPanel(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    "Output",
+                    "Terminal",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -787,77 +864,47 @@ fun OutputPanel(
                     }
                 }
                 IconButton(onClick = onClear, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Close, "Clear output", modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Delete, "Clear terminal", modifier = Modifier.size(16.dp))
+                }
+                IconButton(onClick = onClose, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Close, "Close terminal", modifier = Modifier.size(16.dp))
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
-            when (executionState) {
-                is UiState.Loading -> {
-                    Box(
-                        modifier = Modifier.fillMaxWidth().height(60.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text("Running...", style = MaterialTheme.typography.bodySmall)
-                        }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(scrollState)
+                    .padding(12.dp)
+            ) {
+                messages.forEach { msg ->
+                    val color = when (msg.type) {
+                        com.pocketdev.app.execution.TerminalMessageType.NORMAL -> MaterialTheme.colorScheme.onSurface
+                        com.pocketdev.app.execution.TerminalMessageType.ERROR -> Color(0xFFEF9A9A)
+                        com.pocketdev.app.execution.TerminalMessageType.AGENT -> Color(0xFF81C784)
+                        com.pocketdev.app.execution.TerminalMessageType.STATUS -> Color(0xFF64B5F6)
                     }
-                }
-                is UiState.Success -> {
-                    val result = executionState.data
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                            .padding(12.dp)
-                    ) {
-                        if (result.executionTimeMs > 0) {
-                            Text(
-                                "⏱ ${result.executionTimeMs}ms",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                            )
-                            Spacer(Modifier.height(4.dp))
-                        }
-                        if (language == Language.HTML && result.isSuccess) {
-                            Text(
-                                "✅ HTML rendered successfully. Tap 'Preview HTML' to view.",
-                                style = TextStyle(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 13.sp,
-                                    color = Color(0xFF81C784)
-                                )
-                            )
-                        } else {
-                            Text(
-                                text = if (result.displayOutput.isNotBlank()) result.displayOutput else "(no output)",
-                                style = TextStyle(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 13.sp,
-                                    color = if (result.hasError) Color(0xFFEF9A9A)
-                                    else MaterialTheme.colorScheme.onSurface
-                                )
-                            )
-                        }
-                    }
-                }
-                is UiState.Error -> {
                     Text(
-                        text = "❌ ${executionState.message}",
+                        text = msg.text,
                         style = TextStyle(
                             fontFamily = FontFamily.Monospace,
                             fontSize = 13.sp,
-                            color = Color(0xFFEF9A9A)
+                            color = color
                         ),
-                        modifier = Modifier.padding(12.dp)
+                        modifier = Modifier.padding(bottom = 4.dp)
                     )
                 }
-                else -> {}
+                if (messages.isEmpty()) {
+                    Text(
+                        text = "(no output)",
+                        style = TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    )
+                }
             }
         }
     }
@@ -928,35 +975,68 @@ fun AiResultDialog(
     result: AiResult,
     language: Language,
     onApply: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    currentCode: String = ""
 ) {
     val scrollState = rememberScrollState()
+    val isEdit = result.editStart != null && result.editEnd != null
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("AI Analysis", style = MaterialTheme.typography.titleLarge) },
+        title = { Text(if (isEdit) "AI Edit Preview" else "AI Analysis", style = MaterialTheme.typography.titleLarge) },
         text = {
             Column(
                 modifier = Modifier
                     .verticalScroll(scrollState)
                     .heightIn(max = 400.dp)
             ) {
-                Text(
-                    text = result.content,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                if (result.correctedCode != null) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("Proposed Code:", style = MaterialTheme.typography.titleMedium)
+                if (!isEdit) {
+                    Text(
+                        text = result.content,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                
+                if (isEdit) {
+                    val lines = currentCode.lines()
+                    val startIdx = (result.editStart!! - 1).coerceIn(0, lines.size)
+                    val endIdx = (result.editEnd!! - 1).coerceIn(0, lines.size)
+                    val originalSection = if (startIdx <= endIdx && startIdx < lines.size) {
+                        lines.subList(startIdx, (endIdx + 1).coerceAtMost(lines.size)).joinToString("\n")
+                    } else if (startIdx > endIdx) {
+                        "(Insertion at line ${result.editStart})"
+                    } else "Error extracting original code"
+                    
+                    Text("Original Code (Lines ${result.editStart} - ${result.editEnd}):", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = originalSection,
+                            style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = MaterialTheme.colorScheme.onErrorContainer),
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                if (result.correctedCode != null) {
+                    if (!isEdit) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+                    Text(if (isEdit) "AI Modified Code:" else "Proposed Code:", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        color = if (isEdit) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
                             text = result.correctedCode,
-                            style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                            style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = if (isEdit) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant),
                             modifier = Modifier.padding(8.dp)
                         )
                     }
@@ -966,13 +1046,13 @@ fun AiResultDialog(
         confirmButton = {
             if (result.correctedCode != null) {
                 Button(onClick = { onApply(result.correctedCode) }) {
-                    Text("Apply Code")
+                    Text(if (isEdit) "Apply" else "Apply Code")
                 }
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Close")
+                Text("Cancel")
             }
         }
     )

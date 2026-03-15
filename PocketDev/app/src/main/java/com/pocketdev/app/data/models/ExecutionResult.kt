@@ -25,7 +25,9 @@ data class AiResult(
     val content: String,
     val correctedCode: String? = null,
     val isSuccess: Boolean = true,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val editStart: Int? = null,
+    val editEnd: Int? = null
 )
 
 sealed class UiState<out T> {
