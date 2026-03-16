@@ -21,6 +21,8 @@ class PreferencesManager(private val context: Context) {
         val KEY_WORD_WRAP = booleanPreferencesKey("word_wrap")
         val KEY_ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         val KEY_LAST_PROJECT_ID = longPreferencesKey("last_project_id")
+        val KEY_UNSAVED_CODE = stringPreferencesKey("unsaved_code")
+        val KEY_UNSAVED_LANGUAGE = stringPreferencesKey("unsaved_language")
         val KEY_AI_MODEL = stringPreferencesKey("ai_model")
 
         const val DEFAULT_AI_MODEL = "llama-3.3-70b-versatile"
@@ -69,6 +71,14 @@ class PreferencesManager(private val context: Context) {
         prefs[KEY_LAST_PROJECT_ID] ?: -1L
     }
 
+    val unsavedCode: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[KEY_UNSAVED_CODE]
+    }
+
+    val unsavedLanguage: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[KEY_UNSAVED_LANGUAGE]
+    }
+
     val aiModel: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[KEY_AI_MODEL] ?: DEFAULT_AI_MODEL
     }
@@ -107,6 +117,26 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setLastProjectId(id: Long) {
         context.dataStore.edit { prefs -> prefs[KEY_LAST_PROJECT_ID] = id }
+    }
+
+    suspend fun setUnsavedCode(code: String?) {
+        context.dataStore.edit { prefs -> 
+            if (code == null) {
+                prefs.remove(KEY_UNSAVED_CODE)
+            } else {
+                prefs[KEY_UNSAVED_CODE] = code 
+            }
+        }
+    }
+
+    suspend fun setUnsavedLanguage(language: String?) {
+        context.dataStore.edit { prefs -> 
+            if (language == null) {
+                prefs.remove(KEY_UNSAVED_LANGUAGE)
+            } else {
+                prefs[KEY_UNSAVED_LANGUAGE] = language 
+            }
+        }
     }
 
     suspend fun setAiModel(model: String) {

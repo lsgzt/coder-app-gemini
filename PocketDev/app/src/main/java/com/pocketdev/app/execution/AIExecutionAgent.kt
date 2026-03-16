@@ -46,8 +46,8 @@ class AIExecutionAgent(
                 val currentAttempt = AttemptHistory(currentCode, result.error ?: "Unknown error")
                 history.add(currentAttempt)
 
-                val historyText = history.joinToString("\n---\n") {
-                    "Code:\n${it.code}\nError:\n${it.error}\nAI Fix:\n${it.aiFix ?: "None"}"
+                val historyText = history.takeLast(2).joinToString("\n---\n") {
+                    "Error:\n${it.error}\nAI Fix:\n${it.aiFix ?: "None"}"
                 }
 
                 val aiResult = groqRepository.autoFixCode(currentCode, result.error ?: "Unknown error", historyText, language, apiKey)
@@ -55,6 +55,13 @@ class AIExecutionAgent(
                 if (aiResult.isSuccess && aiResult.correctedCode != null) {
                     // Update history with AI fix
                     history[history.size - 1] = currentAttempt.copy(aiFix = aiResult.correctedCode)
+                    
+                    val thoughtProcess = aiResult.content.replace("```${language.displayName.lowercase()}\n${aiResult.correctedCode}\n```", "").trim()
+                    if (thoughtProcess.isNotBlank()) {
+                        terminalManager.appendAgentMessage("AI Thought Process:\n$thoughtProcess")
+                    }
+                    
+                    terminalManager.appendAgentMessage("AI Applied Fix:\n${aiResult.correctedCode}")
                     
                     currentCode = aiResult.correctedCode
                     updateCode(currentCode)

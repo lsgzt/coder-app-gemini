@@ -66,7 +66,7 @@ fun AppNavigation() {
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = BottomNavItem.Editor.route,
+            startDestination = BottomNavItem.Projects.route,
             modifier = Modifier.padding(innerPadding)
         ) {
             composable(BottomNavItem.Editor.route) {
@@ -74,7 +74,13 @@ fun AppNavigation() {
                     viewModel = editorViewModel,
                     settingsViewModel = settingsViewModel,
                     onNavigateToProjects = {
-                        navController.navigate(BottomNavItem.Projects.route)
+                        navController.navigate(BottomNavItem.Projects.route) {
+                            popUpTo(navController.graph.startDestinationId) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
                     }
                 )
             }

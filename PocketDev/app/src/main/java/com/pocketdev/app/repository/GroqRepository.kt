@@ -45,7 +45,7 @@ class GroqRepository {
             append("3. Any important concepts used\n")
             append("4. Tips for beginners")
         }
-        return callGroqWithRetry(prompt, apiKey, model)
+        return callGroqWithRetry(prompt, apiKey, model, extractCode = false)
     }
 
     suspend fun improveCode(code: String, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
@@ -76,8 +76,8 @@ class GroqRepository {
             }
             append("Task:\nFix the code so it runs correctly.\n\n")
             append("Rules:\n")
-            append("Return ONLY the corrected code.\n")
-            append("Do not include explanations.\n")
+            append("First, provide a brief thought process explaining what went wrong and how you will fix it.\n")
+            append("Then, provide the corrected code inside a single code block.\n")
             append("Avoid repeating previous failed fixes.")
         }
         return callGroqWithRetry(prompt, apiKey, model)
@@ -93,11 +93,21 @@ class GroqRepository {
         return callGroqWithRetry(fullPrompt, apiKey, model)
     }
 
-    private suspend fun callGroqWithRetry(prompt: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+    suspend fun askFollowUp(previousPrompt: String, previousResponse: String, question: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+        val prompt = buildString {
+            append("Previous Context:\n$previousPrompt\n\n")
+            append("Your Previous Response:\n$previousResponse\n\n")
+            append("User Follow-up Question:\n$question\n\n")
+            append("Please answer the follow-up question based on the context above.")
+        }
+        return callGroqWithRetry(prompt, apiKey, model, extractCode = false)
+    }
+
+    private suspend fun callGroqWithRetry(prompt: String, apiKey: String, model: String = "llama-3.3-70b-versatile", extractCode: Boolean = true): AiResult {
         var lastError = ""
         repeat(MAX_RETRIES) { attempt ->
             try {
-                val result = callGroq(prompt, apiKey, model)
+                val result = callGroq(prompt, apiKey, model, extractCode)
                 if (result.isSuccess) return result
                 lastError = result.errorMessage ?: "Unknown error"
                 if (lastError.contains("rate_limit", ignoreCase = true)) {
@@ -120,7 +130,8 @@ class GroqRepository {
         )
     }
 
-    private suspend fun callGroq(prompt: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+    private suspend fun callGroq(prompt: String, apiKey: String, model: String = "llama-3.3-70b-versatile", extractCode: Boolean = true): AiResult {
+        val truncatedPrompt = if (prompt.length > 20000) prompt.take(20000) + "\n...[truncated]" else prompt
         val request = ChatRequest(
             model = model,
             messages = listOf(
@@ -130,7 +141,7 @@ class GroqRepository {
                             "Provide clear, educational explanations and high-quality code examples. " +
                             "Be encouraging and beginner-friendly in your responses."
                 ),
-                Message(role = "user", content = prompt)
+                Message(role = "user", content = truncatedPrompt)
             ),
             temperature = 0.7,
             maxTokens = 2048
@@ -146,7 +157,7 @@ class GroqRepository {
             val content = body?.choices?.firstOrNull()?.message?.content.orEmpty()
             AiResult(
                 content = content,
-                correctedCode = extractCodeBlock(content),
+                correctedCode = if (extractCode) extractCodeBlock(content) else null,
                 isSuccess = true
             )
         } else {
@@ -167,19 +178,22 @@ class GroqRepository {
             append("Instruction:\n$prompt\n\n")
             append("File:\n$code\n\n")
             append("Rules:\n")
-            append("Return ONLY edits in this format:\n\n")
-            append("EDIT_START: <line_number>\n")
-            append("EDIT_END: <line_number>\n\n")
-            append("NEW_CODE:\n<replacement code>\n\n")
+            append("Return ONLY edits using SEARCH/REPLACE blocks.\n")
+            append("Use the following format:\n")
+            append("<<<<\n")
+            append("exact lines to replace from the original file\n")
+            append("====\n")
+            append("new lines to replace them with\n")
+            append(">>>>\n\n")
+            append("The SEARCH block must match the original file exactly, including whitespace and indentation.\n")
+            append("You can include multiple SEARCH/REPLACE blocks.\n")
             append("Do not include explanations.\n")
-            append("Do not rewrite the entire file.\n")
-            append("Modify only the necessary section.")
         }
         
         var lastError = ""
         repeat(MAX_RETRIES) { attempt ->
             try {
-                val result = callGroqForEdit(fullPrompt, apiKey, model)
+                val result = callGroqForEdit(fullPrompt, code, apiKey, model)
                 if (result.isSuccess) return result
                 lastError = result.errorMessage ?: "Unknown error"
                 if (lastError.contains("rate_limit", ignoreCase = true)) {
@@ -202,7 +216,8 @@ class GroqRepository {
         )
     }
 
-    private suspend fun callGroqForEdit(prompt: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+    private suspend fun callGroqForEdit(prompt: String, originalCode: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+        val truncatedPrompt = if (prompt.length > 20000) prompt.take(20000) + "\n...[truncated]" else prompt
         val request = ChatRequest(
             model = model,
             messages = listOf(
@@ -210,7 +225,7 @@ class GroqRepository {
                     role = "system",
                     content = "You are a precise code editor. Follow the formatting rules strictly."
                 ),
-                Message(role = "user", content = prompt)
+                Message(role = "user", content = truncatedPrompt)
             ),
             temperature = 0.2,
             maxTokens = 2048
@@ -225,36 +240,50 @@ class GroqRepository {
             val body = response.body()
             val content = body?.choices?.firstOrNull()?.message?.content.orEmpty()
             
-            val startMatch = Regex("EDIT_START:\\s*(\\d+)").find(content)
-            val endMatch = Regex("EDIT_END:\\s*(\\d+)").find(content)
-            val newCodeMatch = Regex("NEW_CODE:\\s*([\\s\\S]*)").find(content)
+            var currentCode = originalCode
+            val blockRegex = Regex("<<<<\\n([\\s\\S]*?)\\n====\\n([\\s\\S]*?)\\n>>>>")
+            val matches = blockRegex.findAll(content).toList()
             
-            if (startMatch != null && endMatch != null && newCodeMatch != null) {
-                val startLine = startMatch.groupValues[1].toIntOrNull()
-                val endLine = endMatch.groupValues[1].toIntOrNull()
-                var newCode = newCodeMatch.groupValues[1].trim()
-                
-                // Remove markdown code blocks if present in NEW_CODE
-                if (newCode.startsWith("```")) {
-                    val lines = newCode.lines()
-                    if (lines.size >= 2 && lines.last().startsWith("```")) {
-                        newCode = lines.subList(1, lines.size - 1).joinToString("\n")
+            if (matches.isNotEmpty()) {
+                for (match in matches) {
+                    val searchBlock = match.groupValues[1]
+                    val replaceBlock = match.groupValues[2]
+                    
+                    if (currentCode.contains(searchBlock)) {
+                        currentCode = currentCode.replaceFirst(searchBlock, replaceBlock)
+                    } else {
+                        // Fallback: try to match ignoring leading/trailing whitespace
+                        val trimmedSearch = searchBlock.trim()
+                        if (trimmedSearch.isNotEmpty() && currentCode.contains(trimmedSearch)) {
+                            currentCode = currentCode.replaceFirst(trimmedSearch, replaceBlock)
+                        }
                     }
                 }
                 
                 AiResult(
                     content = content,
-                    correctedCode = newCode,
+                    correctedCode = currentCode,
                     isSuccess = true,
-                    editStart = startLine,
-                    editEnd = endLine
+                    isEdit = true
                 )
             } else {
-                AiResult(
-                    content = content,
-                    isSuccess = false,
-                    errorMessage = "AI response did not contain EDIT_START and EDIT_END"
-                )
+                // Fallback: If AI just returned the whole code block
+                val codeRegex = Regex("```(?:[a-zA-Z]*)\\n([\\s\\S]*?)\\n```")
+                val codeMatch = codeRegex.find(content)
+                if (codeMatch != null) {
+                    AiResult(
+                        content = content,
+                        correctedCode = codeMatch.groupValues[1].trim(),
+                        isSuccess = true,
+                        isEdit = true
+                    )
+                } else {
+                    AiResult(
+                        content = content,
+                        isSuccess = false,
+                        errorMessage = "AI response did not contain SEARCH/REPLACE blocks."
+                    )
+                }
             }
         } else {
             val errorBody = response.errorBody()?.string() ?: ""

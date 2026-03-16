@@ -36,7 +36,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         terminalManager = terminalManager,
         updateCode = { newCode -> updateCode(newCode) },
         getApiKey = {
-            secureStorage.groqApiKey
+            secureStorage.getApiKey().first() ?: ""
         }
     )
 
@@ -75,6 +75,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _saveState = MutableStateFlow<UiState<Unit>>(UiState.Idle)
     val saveState: StateFlow<UiState<Unit>> = _saveState.asStateFlow()
 
+    private var lastAiPrompt = ""
+    private var lastAiResult = ""
+
     // Auto-save job
     private var autoSaveJob: Job? = null
     private var hasUnsavedChanges = false
@@ -97,14 +100,61 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
+    init {
+        viewModelScope.launch {
+            val lastProjectId = prefsManager.lastProjectId.first()
+            val unsavedCode = prefsManager.unsavedCode.first()
+            val unsavedLanguage = prefsManager.unsavedLanguage.first()
+
+            if (lastProjectId != -1L) {
+                val project = projectRepository.getProjectById(lastProjectId)
+                if (project != null) {
+                    loadProject(project)
+                    if (unsavedCode != null) {
+                        _currentCode.value = unsavedCode
+                        hasUnsavedChanges = true
+                    }
+                } else {
+                    newFile()
+                    if (unsavedCode != null) {
+                        _currentCode.value = unsavedCode
+                        hasUnsavedChanges = true
+                    }
+                }
+            } else {
+                newFile()
+                if (unsavedCode != null) {
+                    _currentCode.value = unsavedCode
+                    hasUnsavedChanges = true
+                }
+                if (unsavedLanguage != null) {
+                    try {
+                        _currentLanguage.value = Language.valueOf(unsavedLanguage)
+                    } catch (e: Exception) {
+                        // Ignore
+                    }
+                }
+            }
+        }
+    }
+
+    private var saveJob: kotlinx.coroutines.Job? = null
+
     fun updateCode(code: String) {
         _currentCode.value = code
         hasUnsavedChanges = true
-        scheduleAutoSave()
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(1000)
+            prefsManager.setUnsavedCode(code)
+        }
     }
 
     fun setLanguage(language: Language) {
         _currentLanguage.value = language
+        viewModelScope.launch {
+            prefsManager.setUnsavedLanguage(language.name)
+        }
     }
 
     fun setSearchQuery(query: String) {
@@ -119,6 +169,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _executionState.value = UiState.Idle
         _htmlContent.value = null
         hasUnsavedChanges = false
+        viewModelScope.launch {
+            prefsManager.setLastProjectId(project.id)
+            prefsManager.setUnsavedCode(null)
+            prefsManager.setUnsavedLanguage(null)
+        }
     }
 
     fun newFile(language: Language = Language.PYTHON) {
@@ -129,6 +184,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _executionState.value = UiState.Idle
         _htmlContent.value = null
         hasUnsavedChanges = false
+        viewModelScope.launch {
+            prefsManager.setLastProjectId(-1L)
+            prefsManager.setUnsavedCode(null)
+            prefsManager.setUnsavedLanguage(null)
+        }
     }
 
     fun runCode() {
@@ -227,6 +287,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 _currentProjectName.value = projectName
                 hasUnsavedChanges = false
                 _saveState.value = UiState.Success(Unit)
+                prefsManager.setLastProjectId(savedId)
+                prefsManager.setUnsavedCode(null)
+                prefsManager.setUnsavedLanguage(null)
             } catch (e: Exception) {
                 _saveState.value = UiState.Error("Failed to save: ${e.message}")
             }
@@ -268,8 +331,46 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun explainCode() {
-        callAiFeature { code, language, key, model ->
-            groqRepository.explainCode(code, language, key, model)
+        val code = _currentCode.value
+        val language = _currentLanguage.value
+        lastAiPrompt = buildString {
+            append("Explain this ${language.displayName} code in simple, beginner-friendly terms.\n\n")
+            append("```${language.displayName.lowercase()}\n$code\n```\n\n")
+            append("Break down what each part does step-by-step. ")
+            append("Use simple language suitable for students who are learning to code. ")
+            append("Include:\n")
+            append("1. What the code does overall\n")
+            append("2. A step-by-step breakdown of each part\n")
+            append("3. Any important concepts used\n")
+            append("4. Tips for beginners")
+        }
+        callAiFeature { c, l, key, model ->
+            val result = groqRepository.explainCode(c, l, key, model)
+            lastAiResult = result.content
+            result
+        }
+    }
+
+    fun askFollowUpQuestion(question: String) {
+        val apiKey = secureStorage.groqApiKey
+        if (apiKey.isBlank()) {
+            _aiState.value = UiState.Error("Groq API key not set.")
+            return
+        }
+        if (!NetworkUtils.isOnline(context)) {
+            _aiState.value = UiState.Error("No internet connection.")
+            return
+        }
+        viewModelScope.launch {
+            _aiState.value = UiState.Loading
+            val model = prefsManager.aiModel.first()
+            val result = groqRepository.askFollowUp(lastAiPrompt, lastAiResult, question, apiKey, model)
+            if (result.isSuccess) {
+                lastAiResult = lastAiResult + "\n\n**Q: $question**\n\n" + result.content
+                _aiState.value = UiState.Success(result.copy(content = lastAiResult))
+            } else {
+                _aiState.value = UiState.Error(result.errorMessage ?: "Failed to get follow-up answer")
+            }
         }
     }
 
@@ -333,7 +434,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             _aiState.value = UiState.Loading
             val model = prefsManager.aiModel.first()
             val result = groqRepository.editCode(prompt, code, language, apiKey, model)
-            if (result.isSuccess && result.correctedCode != null && result.editStart != null && result.editEnd != null) {
+            if (result.isSuccess && result.correctedCode != null && result.isEdit) {
                 _aiState.value = UiState.Success(result)
             } else {
                 _aiState.value = UiState.Error(result.errorMessage ?: "AI response did not contain EDIT_START and EDIT_END")
@@ -342,29 +443,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun applyAiEdit(result: AiResult) {
-        val currentCode = _currentCode.value
-        val lines = currentCode.lines().toMutableList()
-        
-        val startLine = result.editStart ?: return
-        val endLine = result.editEnd ?: return
         val newCode = result.correctedCode ?: return
-        
-        // Convert 1-based line numbers to 0-based indices
-        val startIndex = (startLine - 1).coerceIn(0, lines.size)
-        val endIndex = (endLine - 1).coerceIn(0, lines.size)
-        
-        if (startIndex <= endIndex) {
-            // Remove the old lines
-            for (i in endIndex downTo startIndex) {
-                if (i < lines.size) {
-                    lines.removeAt(i)
-                }
-            }
-        }
-        // Insert the new code
-        lines.add(startIndex, newCode)
-        
-        _currentCode.value = lines.joinToString("\n")
+        _currentCode.value = newCode
         saveProject()
         dismissAiResult()
     }
@@ -403,6 +483,36 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 UiState.Success(result)
             } else {
                 UiState.Error(result.errorMessage ?: "AI request failed")
+            }
+        }
+    }
+
+    fun chatWithAi(message: String) {
+        val code = _currentCode.value
+        val language = _currentLanguage.value
+        
+        terminalManager.appendNormalMessage("> $message")
+        terminalManager.appendStatusMessage("AI is thinking...")
+        
+        viewModelScope.launch {
+            val apiKey = secureStorage.groqApiKey
+            if (apiKey.isBlank()) {
+                terminalManager.appendError("Groq API key not set. Please add it in Settings.")
+                return@launch
+            }
+            
+            val prompt = buildString {
+                append("You are a helpful coding assistant.\n")
+                append("Current Code:\n```${language.displayName.lowercase()}\n$code\n```\n\n")
+                append("User Message:\n$message")
+            }
+            
+            val model = prefsManager.aiModel.first()
+            val result = groqRepository.explainCode(prompt, code, language, apiKey, model)
+            if (result.isSuccess) {
+                terminalManager.appendAgentMessage(result.content)
+            } else {
+                terminalManager.appendError(result.errorMessage ?: "Unknown error")
             }
         }
     }

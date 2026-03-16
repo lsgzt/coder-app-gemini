@@ -34,7 +34,15 @@ import com.pocketdev.app.editor.AutocompleteItem
 import com.pocketdev.app.viewmodels.EditorViewModel
 import com.pocketdev.app.viewmodels.SettingsViewModel
 import kotlinx.coroutines.launch
+import com.pocketdev.app.ui.components.MarkdownText
+import com.pocketdev.app.ui.components.DiffViewer
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.material.icons.filled.Send
 
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.window.Dialog
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
@@ -72,6 +80,7 @@ fun EditorScreen(
     var showFindReplace by remember { mutableStateOf(false) }
     var showInputPanel by remember { mutableStateOf(false) }
     var showTerminal by remember { mutableStateOf(false) }
+    var isTerminalFullScreen by remember { mutableStateOf(false) }
     val stdInput by viewModel.stdInput.collectAsState()
     var findText by remember { mutableStateOf("") }
     var replaceText by remember { mutableStateOf("") }
@@ -97,6 +106,10 @@ fun EditorScreen(
     }
 
     val context = LocalContext.current
+
+    BackHandler {
+        onNavigateToProjects()
+    }
 
     val openDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -149,6 +162,7 @@ fun EditorScreen(
     )
 
     Scaffold(
+        modifier = Modifier.imePadding(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -196,6 +210,10 @@ fun EditorScreen(
                     // Terminal Toggle
                     IconButton(onClick = { showTerminal = !showTerminal }) {
                         Icon(Icons.Default.Terminal, "Toggle Terminal", tint = if (showTerminal) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+                    }
+
+                    IconButton(onClick = { showSaveDialog = true }) {
+                        Icon(Icons.Default.Save, "Save")
                     }
 
                     // AI Features
@@ -385,60 +403,93 @@ fun EditorScreen(
             }
 
             // Code Editor
-            Box(modifier = Modifier.weight(1f)) {
-                CodeEditor(
-                    code = code,
-                    language = language,
-                    fontSize = fontSize,
-                    lineNumbers = lineNumbers,
-                    wordWrap = wordWrap,
-                    autocompleteEnabled = autocompleteEnabled,
-                    onCodeChange = viewModel::updateCode,
-                    selection = selection,
-                    onSelectionChange = { selection = it },
-                    modifier = Modifier.fillMaxSize()
-                )
+            if (!isTerminalFullScreen) {
+                Box(modifier = Modifier.weight(1f)) {
+                    if (aiState is UiState.Success && (aiState as UiState.Success<AiResult>).data.isEdit) {
+                        val result = (aiState as UiState.Success<AiResult>).data
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("AI Proposed Changes", style = MaterialTheme.typography.titleMedium)
+                                Row {
+                                    Button(onClick = { viewModel.applyAiEdit(result) }) {
+                                        Text("Accept")
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    OutlinedButton(onClick = viewModel::dismissAiResult) {
+                                        Text("Reject")
+                                    }
+                                }
+                            }
+
+                            DiffViewer(
+                                originalCode = code,
+                                newCode = result.correctedCode ?: code,
+                                fontSize = fontSize,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    } else {
+                        CodeEditor(
+                            code = code,
+                            language = language,
+                            fontSize = fontSize,
+                            lineNumbers = lineNumbers,
+                            wordWrap = wordWrap,
+                            autocompleteEnabled = autocompleteEnabled,
+                            onCodeChange = viewModel::updateCode,
+                            selection = selection,
+                            onSelectionChange = { selection = it },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
             }
 
             // Input Panel
-            AnimatedVisibility(visible = showInputPanel) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    tonalElevation = 2.dp
-                ) {
-                    Column(modifier = Modifier.padding(8.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.Keyboard,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                "Standard Input",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(Modifier.weight(1f))
-                            IconButton(onClick = { showInputPanel = false }, modifier = Modifier.size(24.dp)) {
-                                Icon(Icons.Default.Close, "Close input panel", modifier = Modifier.size(16.dp))
+            if (!isTerminalFullScreen) {
+                AnimatedVisibility(visible = showInputPanel) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        tonalElevation = 2.dp
+                    ) {
+                        Column(modifier = Modifier.padding(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Keyboard,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "Standard Input",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(Modifier.weight(1f))
+                                IconButton(onClick = { showInputPanel = false }, modifier = Modifier.size(24.dp)) {
+                                    Icon(Icons.Default.Close, "Close input panel", modifier = Modifier.size(16.dp))
+                                }
                             }
+                            Spacer(Modifier.height(4.dp))
+                            OutlinedTextField(
+                                value = stdInput,
+                                onValueChange = viewModel::updateStdInput,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp, max = 120.dp),
+                                textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                                placeholder = { Text("Enter input for your script here...", style = TextStyle(fontSize = 13.sp)) },
+                                minLines = 3,
+                                maxLines = 5
+                            )
                         }
-                        Spacer(Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = stdInput,
-                            onValueChange = viewModel::updateStdInput,
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp, max = 120.dp),
-                            textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
-                            placeholder = { Text("Enter input for your script here...", style = TextStyle(fontSize = 13.sp)) },
-                            minLines = 3,
-                            maxLines = 5
-                        )
                     }
                 }
             }
@@ -447,15 +498,23 @@ fun EditorScreen(
             AnimatedVisibility(
                 visible = showTerminal,
                 enter = slideInVertically(initialOffsetY = { it }),
-                exit = slideOutVertically(targetOffsetY = { it })
+                exit = slideOutVertically(targetOffsetY = { it }),
+                modifier = if (isTerminalFullScreen) Modifier.weight(1f) else Modifier
             ) {
                 TerminalPanel(
                     terminalManager = viewModel.terminalManager,
+                    isFullScreen = isTerminalFullScreen,
+                    onToggleFullScreen = { isTerminalFullScreen = !isTerminalFullScreen },
                     onClear = { viewModel.terminalManager.clearTerminal() },
-                    onClose = { showTerminal = false },
+                    onClose = { 
+                        showTerminal = false
+                        isTerminalFullScreen = false
+                    },
                     onShowHtml = if (language == Language.HTML && htmlContent != null) {
                         { showHtmlPreview = true }
-                    } else null
+                    } else null,
+                    onSendInput = viewModel::chatWithAi,
+                    modifier = if (isTerminalFullScreen) Modifier.fillMaxSize() else Modifier
                 )
             }
         }
@@ -466,19 +525,18 @@ fun EditorScreen(
         AiLoadingDialog()
     } else if (aiState is UiState.Success) {
         val result = (aiState as UiState.Success<AiResult>).data
-        AiResultDialog(
-            result = result,
-            language = language,
-            onApply = { 
-                if (result.editStart != null && result.editEnd != null) {
-                    viewModel.applyAiEdit(result)
-                } else {
+        if (!result.isEdit) {
+            AiResultDialog(
+                result = result,
+                language = language,
+                onApply = { 
                     viewModel.applyAiCode(it)
-                }
-            },
-            onDismiss = viewModel::dismissAiResult,
-            currentCode = code
-        )
+                },
+                onDismiss = viewModel::dismissAiResult,
+                onAskFollowUp = viewModel::askFollowUpQuestion,
+                currentCode = code
+            )
+        }
     } else if (aiState is UiState.Error) {
         AlertDialog(
             onDismissRequest = viewModel::dismissAiResult,
@@ -599,8 +657,36 @@ fun CodeEditor(
     onSelectionChange: (androidx.compose.ui.text.TextRange) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val highlightedCode = remember(code, language) {
-        SyntaxHighlighter.highlight(code, language)
+    var textFieldValue by remember {
+        mutableStateOf(
+            androidx.compose.ui.text.input.TextFieldValue(
+                text = code,
+                selection = selection
+            )
+        )
+    }
+
+    // Sync external code changes (e.g., loading a new file or AI edits)
+    LaunchedEffect(code) {
+        if (code != textFieldValue.text) {
+            textFieldValue = textFieldValue.copy(text = code)
+        }
+    }
+
+    // Sync external selection changes
+    LaunchedEffect(selection) {
+        if (selection != textFieldValue.selection) {
+            textFieldValue = textFieldValue.copy(selection = selection)
+        }
+    }
+
+    var highlightedCode by remember { mutableStateOf(androidx.compose.ui.text.AnnotatedString(textFieldValue.text)) }
+
+    LaunchedEffect(textFieldValue.text, language) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val newHighlight = SyntaxHighlighter.highlight(textFieldValue.text, language)
+            highlightedCode = newHighlight
+        }
     }
 
     val lineHeight = (fontSize * 1.5).sp
@@ -612,16 +698,19 @@ fun CodeEditor(
 
     // Shared scroll state so line numbers scroll with code
     val verticalScrollState = rememberScrollState()
+    val horizontalScrollState = rememberScrollState()
 
     // Autocomplete state
     var showAutocomplete by remember { mutableStateOf(false) }
     var suggestions by remember { mutableStateOf<List<AutocompleteItem>>(emptyList()) }
+    var cursorRect by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
+    var lineNumberWidth by remember { mutableStateOf(0.dp) }
 
     // Update suggestions when code changes
-    LaunchedEffect(code, selection, language, autocompleteEnabled) {
-        val cursorPosition = selection.start
-        if (autocompleteEnabled && cursorPosition <= code.length) {
-            val newSuggestions = AutocompleteEngine.getSuggestions(code, cursorPosition, language)
+    LaunchedEffect(textFieldValue.text, textFieldValue.selection, language, autocompleteEnabled) {
+        val cursorPosition = textFieldValue.selection.start
+        if (autocompleteEnabled && cursorPosition <= textFieldValue.text.length) {
+            val newSuggestions = AutocompleteEngine.getSuggestions(textFieldValue.text, cursorPosition, language)
             suggestions = newSuggestions
             showAutocomplete = newSuggestions.isNotEmpty()
         } else {
@@ -638,8 +727,8 @@ fun CodeEditor(
         ) {
             // Line numbers — same font size and line height as code, shared scroll
             if (lineNumbers) {
-                val lines = code.split("\n").size
-                val lineNumberWidth = (maxOf(lines, 1).toString().length * fontSize * 0.6 + 12).dp
+                val lines = textFieldValue.text.split("\n").size
+                lineNumberWidth = (maxOf(lines, 1).toString().length * fontSize * 0.6 + 12).dp
                 val lineNumbersText = (1..maxOf(lines, 1)).joinToString("\n")
                 Column(
                     modifier = Modifier
@@ -665,24 +754,18 @@ fun CodeEditor(
                     .weight(1f)
                     .fillMaxHeight()
                     .let {
-                        if (!wordWrap) it.horizontalScroll(rememberScrollState()) else it
+                        if (!wordWrap) it.horizontalScroll(horizontalScrollState) else it
                     }
             ) {
                 BasicTextField(
-                    value = androidx.compose.ui.text.input.TextFieldValue(
-                        text = code,
-                        selection = androidx.compose.ui.text.TextRange(
-                            start = selection.start.coerceIn(0, code.length),
-                            end = selection.end.coerceIn(0, code.length)
-                        )
-                    ),
+                    value = textFieldValue,
                     onValueChange = { tfv ->
                         var newText = tfv.text
                         var newSelection = tfv.selection
                         var newCursor = newSelection.start
                         
                         // Auto-closing brackets
-                        if (newText.length == code.length + 1 && newCursor > 0) {
+                        if (newText.length == textFieldValue.text.length + 1 && newCursor > 0) {
                             val insertedChar = newText[newCursor - 1]
                             val closingChar = when (insertedChar) {
                                 '(' -> ")"
@@ -694,13 +777,21 @@ fun CodeEditor(
                             }
                             if (closingChar != null) {
                                 newText = newText.substring(0, newCursor) + closingChar + newText.substring(newCursor)
+                                newSelection = androidx.compose.ui.text.TextRange(newCursor)
                             }
                         }
+                        
+                        val newTfv = androidx.compose.ui.text.input.TextFieldValue(newText, newSelection)
+                        textFieldValue = newTfv
                         
                         onSelectionChange(newSelection)
                         if (newText != code) {
                             onCodeChange(newText)
                         }
+                    },
+                    onTextLayout = { layoutResult ->
+                        val cursorPosition = textFieldValue.selection.start.coerceIn(0, textFieldValue.text.length)
+                        cursorRect = layoutResult.getCursorRect(cursorPosition)
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -723,35 +814,54 @@ fun CodeEditor(
 
         // Autocomplete dropdown
         if (showAutocomplete && suggestions.isNotEmpty()) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = if (lineNumbers) 56.dp else 8.dp, top = 40.dp)
-                    .widthIn(min = 200.dp, max = 320.dp)
-                    .heightIn(max = 180.dp),
-                shape = RoundedCornerShape(8.dp),
-                shadowElevation = 8.dp,
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 4.dp
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val xOffset = with(density) { 
+                val baseLeft = if (lineNumbers) lineNumberWidth.toPx() else 0f
+                val paddingLeft = 8.dp.toPx()
+                val scrollX = if (!wordWrap) horizontalScrollState.value.toFloat() else 0f
+                (baseLeft + paddingLeft + cursorRect.left - scrollX).toInt() 
+            }
+            val yOffset = with(density) { 
+                val paddingTop = 8.dp.toPx()
+                (paddingTop + cursorRect.bottom - verticalScrollState.value).toInt() 
+            }
+            
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = androidx.compose.ui.unit.IntOffset(xOffset, yOffset),
+                properties = PopupProperties(focusable = false)
             ) {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState())
+                Surface(
+                    modifier = Modifier
+                        .widthIn(min = 200.dp, max = 320.dp)
+                        .heightIn(max = 180.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    shadowElevation = 8.dp,
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 4.dp
                 ) {
-                    suggestions.forEach { item ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    // Insert completion: replace the prefix with the full text
-                                    val cursorPosition = selection.start
-                                    val prefix = getWordPrefixForCompletion(code, cursorPosition)
-                                    val before = code.substring(0, cursorPosition - prefix.length)
-                                    val after = code.substring(cursorPosition)
-                                    val newCode = before + item.insertText + after
-                                    onCodeChange(newCode)
-                                    onSelectionChange(androidx.compose.ui.text.TextRange(cursorPosition - prefix.length + item.insertText.length + item.cursorOffset))
-                                    showAutocomplete = false
-                                }
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState())
+                    ) {
+                        suggestions.forEach { item ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        // Insert completion: replace the prefix with the full text
+                                        val cursorPosition = textFieldValue.selection.start
+                                        val prefix = getWordPrefixForCompletion(textFieldValue.text, cursorPosition)
+                                        val before = textFieldValue.text.substring(0, cursorPosition - prefix.length)
+                                        val after = textFieldValue.text.substring(cursorPosition)
+                                        val newCode = before + item.insertText + after
+                                        
+                                        val newSelection = androidx.compose.ui.text.TextRange(cursorPosition - prefix.length + item.insertText.length + item.cursorOffset)
+                                        textFieldValue = androidx.compose.ui.text.input.TextFieldValue(newCode, newSelection)
+                                        
+                                        onCodeChange(newCode)
+                                        onSelectionChange(newSelection)
+                                        showAutocomplete = false
+                                    }
                                 .padding(horizontal = 12.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -803,6 +913,9 @@ fun CodeEditor(
         }
     }
 }
+}
+
+
 
 private fun getWordPrefixForCompletion(code: String, cursorPos: Int): String {
     if (cursorPos <= 0 || cursorPos > code.length) return ""
@@ -816,11 +929,15 @@ private fun getWordPrefixForCompletion(code: String, cursorPos: Int): String {
 @Composable
 fun TerminalPanel(
     terminalManager: com.pocketdev.app.execution.TerminalManager,
+    isFullScreen: Boolean,
+    onToggleFullScreen: () -> Unit,
     onClear: () -> Unit,
     onClose: () -> Unit,
-    onShowHtml: (() -> Unit)?
+    onShowHtml: (() -> Unit)?,
+    onSendInput: ((String) -> Unit)? = null,
+    modifier: Modifier = Modifier
 ) {
-    val maxHeight = 250.dp
+    val maxHeight = if (isFullScreen) Dp.Unspecified else 250.dp
     val messages by terminalManager.messages.collectAsState()
     val scrollState = rememberScrollState()
 
@@ -831,13 +948,13 @@ fun TerminalPanel(
     }
 
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 100.dp, max = maxHeight),
+            .then(if (!isFullScreen) Modifier.heightIn(min = 100.dp, max = maxHeight) else Modifier),
         color = MaterialTheme.colorScheme.surfaceVariant,
         tonalElevation = 4.dp
     ) {
-        Column {
+        Column(modifier = Modifier.fillMaxSize()) {
             // Header
             Row(
                 modifier = Modifier
@@ -863,6 +980,9 @@ fun TerminalPanel(
                         Text("Preview HTML", style = MaterialTheme.typography.labelSmall)
                     }
                 }
+                IconButton(onClick = onToggleFullScreen, modifier = Modifier.size(28.dp)) {
+                    Icon(if (isFullScreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, "Toggle Fullscreen", modifier = Modifier.size(16.dp))
+                }
                 IconButton(onClick = onClear, modifier = Modifier.size(28.dp)) {
                     Icon(Icons.Default.Delete, "Clear terminal", modifier = Modifier.size(16.dp))
                 }
@@ -875,6 +995,7 @@ fun TerminalPanel(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .weight(1f)
                     .verticalScroll(scrollState)
                     .padding(12.dp)
             ) {
@@ -904,6 +1025,44 @@ fun TerminalPanel(
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
                     )
+                }
+            }
+
+            if (onSendInput != null) {
+                var inputText by remember { mutableStateOf("") }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        placeholder = { Text("Type a message...", style = MaterialTheme.typography.bodySmall) },
+                        modifier = Modifier.weight(1f),
+                        textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Send),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onSend = {
+                                if (inputText.isNotBlank()) {
+                                    onSendInput(inputText)
+                                    inputText = ""
+                                }
+                            }
+                        )
+                    )
+                    IconButton(
+                        onClick = {
+                            if (inputText.isNotBlank()) {
+                                onSendInput(inputText)
+                                inputText = ""
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.Send, contentDescription = "Send")
+                    }
                 }
             }
         }
@@ -976,83 +1135,82 @@ fun AiResultDialog(
     language: Language,
     onApply: (String) -> Unit,
     onDismiss: () -> Unit,
+    onAskFollowUp: ((String) -> Unit)? = null,
     currentCode: String = ""
 ) {
     val scrollState = rememberScrollState()
-    val isEdit = result.editStart != null && result.editEnd != null
+    var followUpText by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isEdit) "AI Edit Preview" else "AI Analysis", style = MaterialTheme.typography.titleLarge) },
+        title = { Text("AI Analysis", style = MaterialTheme.typography.titleLarge) },
         text = {
             Column(
                 modifier = Modifier
-                    .verticalScroll(scrollState)
-                    .heightIn(max = 400.dp)
+                    .heightIn(max = 500.dp)
             ) {
-                if (!isEdit) {
-                    Text(
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(scrollState)
+                ) {
+                    MarkdownText(
                         text = result.content,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-                
-                if (isEdit) {
-                    val lines = currentCode.lines()
-                    val startIdx = (result.editStart!! - 1).coerceIn(0, lines.size)
-                    val endIdx = (result.editEnd!! - 1).coerceIn(0, lines.size)
-                    val originalSection = if (startIdx <= endIdx && startIdx < lines.size) {
-                        lines.subList(startIdx, (endIdx + 1).coerceAtMost(lines.size)).joinToString("\n")
-                    } else if (startIdx > endIdx) {
-                        "(Insertion at line ${result.editStart})"
-                    } else "Error extracting original code"
-                    
-                    Text("Original Code (Lines ${result.editStart} - ${result.editEnd}):", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = originalSection,
-                            style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = MaterialTheme.colorScheme.onErrorContainer),
-                            modifier = Modifier.padding(8.dp)
-                        )
+                    )
+
+                    if (result.correctedCode != null && !result.isEdit) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Proposed Code:", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = result.correctedCode,
+                                style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant),
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
                 }
 
-                if (result.correctedCode != null) {
-                    if (!isEdit) {
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
-                    Text(if (isEdit) "AI Modified Code:" else "Proposed Code:", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Surface(
-                        color = if (isEdit) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = result.correctedCode,
-                            style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = if (isEdit) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant),
-                            modifier = Modifier.padding(8.dp)
-                        )
-                    }
+                if (onAskFollowUp != null) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = followUpText,
+                        onValueChange = { followUpText = it },
+                        placeholder = { Text("Ask a follow-up question...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = {
+                            IconButton(
+                                onClick = {
+                                    if (followUpText.isNotBlank()) {
+                                        onAskFollowUp(followUpText)
+                                        followUpText = ""
+                                    }
+                                },
+                                enabled = followUpText.isNotBlank()
+                            ) {
+                                Icon(Icons.Default.Send, "Send")
+                            }
+                        }
+                    )
                 }
             }
         },
         confirmButton = {
-            if (result.correctedCode != null) {
+            if (result.correctedCode != null && !result.isEdit) {
                 Button(onClick = { onApply(result.correctedCode) }) {
-                    Text(if (isEdit) "Apply" else "Apply Code")
+                    Text("Apply Code")
                 }
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text("Close")
             }
         }
     )
@@ -1216,8 +1374,6 @@ object SyntaxHighlighter {
 
     private fun tokenize(code: String, language: Language): List<Token> {
         val tokens = mutableListOf<Token>()
-        var remaining = code
-
         val patterns = when (language) {
             Language.PYTHON -> pythonPatterns()
             Language.JAVASCRIPT -> jsPatterns()
@@ -1229,20 +1385,35 @@ object SyntaxHighlighter {
             Language.JSON -> jsonPatterns()
         }
 
-        while (remaining.isNotEmpty()) {
-            var matched = false
-            for ((regex, color) in patterns) {
-                val match = regex.find(remaining)
-                if (match != null && match.range.first == 0) {
-                    tokens.add(Token(match.value, color))
-                    remaining = remaining.substring(match.value.length)
-                    matched = true
-                    break
+        val matchers = patterns.map { it.first.toPattern().matcher(code) to it.second }
+        var index = 0
+        val length = code.length
+
+        while (index < length) {
+            var bestMatchStart = length
+            var bestMatchEnd = length
+            var bestColor = colorDefault
+
+            for ((matcher, color) in matchers) {
+                matcher.region(index, length)
+                if (matcher.find()) {
+                    if (matcher.start() < bestMatchStart) {
+                        bestMatchStart = matcher.start()
+                        bestMatchEnd = matcher.end()
+                        bestColor = color
+                    }
                 }
             }
-            if (!matched) {
-                tokens.add(Token(remaining[0].toString(), Color(0xFFCDD9E5)))
-                remaining = remaining.substring(1)
+
+            if (bestMatchStart > index) {
+                tokens.add(Token(code.substring(index, bestMatchStart), colorDefault))
+            }
+
+            if (bestMatchStart < length) {
+                tokens.add(Token(code.substring(bestMatchStart, bestMatchEnd), bestColor))
+                index = bestMatchEnd
+            } else {
+                break
             }
         }
         return tokens
