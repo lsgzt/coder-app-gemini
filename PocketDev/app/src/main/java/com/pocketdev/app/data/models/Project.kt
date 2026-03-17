@@ -2,6 +2,14 @@ package com.pocketdev.app.data.models
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import java.util.UUID
+
+data class ProjectFile(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val language: Language,
+    val code: String
+)
 
 enum class Language(val displayName: String, val extension: String, val icon: String) {
     PYTHON("Python", ".py", "🐍"),
@@ -33,9 +41,10 @@ data class Project(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val name: String,
-    val language: Language,
-    val code: String,
+    val language: Language, // Primary language of the project
+    val code: String = "", // Kept for backward compatibility, but we use files now
     val createdAt: Long = System.currentTimeMillis(),
     val modifiedAt: Long = System.currentTimeMillis(),
-    val description: String = ""
+    val description: String = "",
+    val files: List<ProjectFile> = emptyList()
 )

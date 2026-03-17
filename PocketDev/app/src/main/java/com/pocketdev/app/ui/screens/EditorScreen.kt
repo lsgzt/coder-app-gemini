@@ -25,7 +25,6 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -49,6 +48,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import java.io.BufferedReader
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.KeyEventType
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 
@@ -61,6 +65,8 @@ fun EditorScreen(
 ) {
     val code by viewModel.currentCode.collectAsState()
     val language by viewModel.currentLanguage.collectAsState()
+    val files by viewModel.currentFiles.collectAsState()
+    val activeFileIndex by viewModel.activeFileIndex.collectAsState()
     val projectName by viewModel.currentProjectName.collectAsState()
     val executionState by viewModel.executionState.collectAsState()
     val aiState by viewModel.aiState.collectAsState()
@@ -77,6 +83,7 @@ fun EditorScreen(
     var showAiEditDialog by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var showNewFileDialog by remember { mutableStateOf(false) }
+    var showAddFileDialog by remember { mutableStateOf(false) }
     var showHtmlPreview by remember { mutableStateOf(false) }
     var showFindReplace by remember { mutableStateOf(false) }
     var showInputPanel by remember { mutableStateOf(false) }
@@ -386,6 +393,29 @@ fun EditorScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // File Tabs
+            if (files.isNotEmpty()) {
+                androidx.compose.material3.ScrollableTabRow(
+                    selectedTabIndex = activeFileIndex,
+                    edgePadding = 8.dp,
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    files.forEachIndexed { index, file ->
+                        androidx.compose.material3.Tab(
+                            selected = activeFileIndex == index,
+                            onClick = { viewModel.switchFile(index) },
+                            text = { Text(file.name) }
+                        )
+                    }
+                    androidx.compose.material3.Tab(
+                        selected = false,
+                        onClick = { showAddFileDialog = true },
+                        text = { Icon(Icons.Default.Add, "Add File") }
+                    )
+                }
+            }
+
             // Find & Replace bar
             AnimatedVisibility(visible = showFindReplace) {
                 FindReplaceBar(
@@ -414,7 +444,13 @@ fun EditorScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("AI Proposed Changes", style = MaterialTheme.typography.titleMedium)
+                                Column {
+                                    Text("AI Proposed Changes", style = MaterialTheme.typography.titleMedium)
+                                    val modifiedFiles = result.patches.map { it.fileName }.distinct()
+                                    if (modifiedFiles.isNotEmpty()) {
+                                        Text("Modified files: ${modifiedFiles.joinToString(", ")}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                                 Row {
                                     Button(onClick = { viewModel.applyAiEdit(result) }) {
                                         Text("Accept")
@@ -428,24 +464,78 @@ fun EditorScreen(
 
                             DiffViewer(
                                 originalCode = code,
-                                newCode = result.correctedCode ?: code,
+                                newCode = if (files.isNotEmpty()) viewModel.getPreviewCode(files[activeFileIndex].name, result) else code,
                                 fontSize = fontSize,
                                 modifier = Modifier.weight(1f)
                             )
                         }
                     } else {
-                        CodeEditor(
-                            code = code,
-                            language = language,
-                            fontSize = fontSize,
-                            lineNumbers = lineNumbers,
-                            wordWrap = wordWrap,
-                            autocompleteEnabled = autocompleteEnabled,
-                            onCodeChange = viewModel::updateCode,
-                            selection = selection,
-                            onSelectionChange = { selection = it },
-                            modifier = Modifier.fillMaxSize()
-                        )
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            val ghostSuggestion by viewModel.ghostSuggestion.collectAsState()
+                            CodeEditor(
+                                code = code,
+                                language = language,
+                                fontSize = fontSize,
+                                lineNumbers = lineNumbers,
+                                wordWrap = wordWrap,
+                                autocompleteEnabled = autocompleteEnabled,
+                                ghostSuggestion = ghostSuggestion,
+                                onCodeChange = {
+                                    viewModel.updateCode(it)
+                                },
+                                selection = selection,
+                                onSelectionChange = { 
+                                    selection = it 
+                                    if (ghostSuggestion != null) viewModel.rejectGhostSuggestion()
+                                    viewModel.requestGhostSuggestion(it.start)
+                                },
+                                onRejectGhostSuggestion = {
+                                    viewModel.rejectGhostSuggestion()
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            if (ghostSuggestion != null) {
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .align(Alignment.BottomCenter)
+                                        .padding(16.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = MaterialTheme.shapes.medium,
+                                    shadowElevation = 8.dp
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("AI Suggestion", style = MaterialTheme.typography.titleSmall)
+                                            Row {
+                                                TextButton(onClick = { 
+                                                    val newCode = code.substring(0, selection.start) + ghostSuggestion!! + code.substring(selection.start)
+                                                    viewModel.updateCode(newCode)
+                                                    selection = androidx.compose.ui.text.TextRange(selection.start + ghostSuggestion!!.length)
+                                                    viewModel.rejectGhostSuggestion()
+                                                }) {
+                                                    Text("Accept (Tab)")
+                                                }
+                                                TextButton(onClick = { viewModel.rejectGhostSuggestion() }) {
+                                                    Text("Reject (Esc)")
+                                                }
+                                            }
+                                        }
+                                        val newCode = code.substring(0, selection.start) + ghostSuggestion + code.substring(selection.start)
+                                        DiffViewer(
+                                            originalCode = code,
+                                            newCode = newCode,
+                                            fontSize = fontSize,
+                                            modifier = Modifier.heightIn(max = 200.dp).fillMaxWidth()
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -636,6 +726,61 @@ fun EditorScreen(
         )
     }
 
+    // Add File Dialog
+    if (showAddFileDialog) {
+        var newFileName by remember { mutableStateOf("") }
+        var selectedLang by remember { mutableStateOf(Language.PYTHON) }
+        AlertDialog(
+            onDismissRequest = { showAddFileDialog = false },
+            title = { Text("Add File") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = newFileName,
+                        onValueChange = { newFileName = it },
+                        label = { Text("File Name") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Select language:", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Language.values().forEach { lang ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedLang = lang }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = selectedLang == lang,
+                                onClick = { selectedLang = lang }
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("${lang.icon} ${lang.displayName}")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newFileName.isNotBlank()) {
+                            val nameWithExt = if (newFileName.contains(".")) newFileName else newFileName + selectedLang.extension
+                            viewModel.addFile(nameWithExt, selectedLang)
+                            showAddFileDialog = false
+                        }
+                    }
+                ) {
+                    Text("Add")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddFileDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     // HTML Preview
     if (showHtmlPreview && htmlContent != null) {
         HtmlPreviewDialog(
@@ -653,9 +798,11 @@ fun CodeEditor(
     lineNumbers: Boolean,
     wordWrap: Boolean = false,
     autocompleteEnabled: Boolean = true,
+    ghostSuggestion: String? = null,
     onCodeChange: (String) -> Unit,
     selection: androidx.compose.ui.text.TextRange,
     onSelectionChange: (androidx.compose.ui.text.TextRange) -> Unit,
+    onRejectGhostSuggestion: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var textFieldValue by remember {
@@ -683,10 +830,22 @@ fun CodeEditor(
 
     var highlightedCode by remember { mutableStateOf(androidx.compose.ui.text.AnnotatedString(textFieldValue.text)) }
 
-    LaunchedEffect(textFieldValue.text, language) {
+    LaunchedEffect(textFieldValue.text, language, ghostSuggestion, textFieldValue.selection) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             val newHighlight = SyntaxHighlighter.highlight(textFieldValue.text, language)
-            highlightedCode = newHighlight
+            
+            if (ghostSuggestion != null) {
+                val cursor = textFieldValue.selection.start.coerceIn(0, textFieldValue.text.length)
+                val builder = androidx.compose.ui.text.AnnotatedString.Builder()
+                builder.append(newHighlight.subSequence(0, cursor))
+                builder.withStyle(SpanStyle(color = Color.Gray.copy(alpha = 0.6f), fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) {
+                    append(ghostSuggestion)
+                }
+                builder.append(newHighlight.subSequence(cursor, newHighlight.length))
+                highlightedCode = builder.toAnnotatedString()
+            } else {
+                highlightedCode = newHighlight
+            }
         }
     }
 
@@ -796,7 +955,23 @@ fun CodeEditor(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(8.dp),
+                        .padding(8.dp)
+                        .onKeyEvent { keyEvent ->
+                            if (keyEvent.type == KeyEventType.KeyDown) {
+                                if (keyEvent.key == Key.Tab && ghostSuggestion != null) {
+                                    val newCode = textFieldValue.text.substring(0, textFieldValue.selection.start) + ghostSuggestion!! + textFieldValue.text.substring(textFieldValue.selection.start)
+                                    onCodeChange(newCode)
+                                    val newCursor = textFieldValue.selection.start + ghostSuggestion!!.length
+                                    onSelectionChange(androidx.compose.ui.text.TextRange(newCursor))
+                                    return@onKeyEvent true
+                                }
+                                if (keyEvent.key == Key.Escape && ghostSuggestion != null) {
+                                    onRejectGhostSuggestion()
+                                    return@onKeyEvent true
+                                }
+                            }
+                            false
+                        },
                     textStyle = codeTextStyle.copy(color = Color.Transparent),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     decorationBox = { innerTextField ->

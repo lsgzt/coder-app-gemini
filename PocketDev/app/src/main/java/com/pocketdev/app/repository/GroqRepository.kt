@@ -17,26 +17,84 @@ class GroqRepository {
         private const val BASE_DELAY_MS = 1000L
     }
 
-    suspend fun fixBug(code: String, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+    private fun buildProjectContext(files: List<com.pocketdev.app.data.models.ProjectFile>, activeFileName: String): String {
+        return buildString {
+            append("Files:\n")
+            files.forEach { file ->
+                append("--- ${file.name} ---\n")
+                if (file.name == activeFileName) {
+                    val lines = file.code.lines()
+                    lines.forEachIndexed { index, line ->
+                        append("${index + 1}: $line\n")
+                    }
+                } else {
+                    append("// Summary of ${file.name}\n")
+                    val lines = file.code.lines()
+                    var inComment = false
+                    lines.forEachIndexed { index, line ->
+                        val trimmed = line.trim()
+                        if (trimmed.startsWith("/*")) inComment = true
+                        if (!inComment && trimmed.isNotEmpty() && !trimmed.startsWith("//")) {
+                            if (trimmed.startsWith("fun ") || trimmed.startsWith("class ") || 
+                                trimmed.startsWith("def ") || trimmed.startsWith("function ") ||
+                                trimmed.startsWith("public ") || trimmed.startsWith("private ")) {
+                                append("${index + 1}: $line\n")
+                            }
+                        }
+                        if (trimmed.endsWith("*/")) inComment = false
+                    }
+                }
+                append("\n")
+            }
+        }
+    }
+
+    suspend fun fixBug(files: List<com.pocketdev.app.data.models.ProjectFile>, activeFileName: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
         val prompt = buildString {
-            append("Analyze this ${language.displayName} code and identify any bugs, errors, or issues.\n\n")
-            append("```${language.displayName.lowercase()}\n$code\n```\n\n")
+            append("Analyze this project and identify any bugs, errors, or issues.\n\n")
+            append(buildProjectContext(files, activeFileName))
             append("Please provide:\n")
             append("1. A clear explanation of what bugs/issues were found\n")
-            append("2. The corrected code\n")
+            append("2. The corrected code as patches\n")
             append("3. An explanation of each fix\n\n")
             append("Format your response as:\n")
             append("ISSUES FOUND:\n[explanation]\n\n")
-            append("CORRECTED CODE:\n```${language.displayName.lowercase()}\n[corrected code]\n```\n\n")
-            append("EXPLANATION OF FIXES:\n[detailed explanation]")
+            append("Then, provide the fixes as patches using the following format:\n")
+            append("FILE: main.kt\n")
+            append("EDIT_START: start_line_number\n")
+            append("EDIT_END: end_line_number\n")
+            append("NEW_CODE:\n")
+            append("new lines to replace them with\n")
+            append("EOF\n\n")
+            append("You can include multiple patches.\n")
         }
-        return callGroqWithRetry(prompt, apiKey, model)
+        return callGroqForMultiEdit(prompt, files, apiKey, model)
     }
 
-    suspend fun explainCode(code: String, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+    suspend fun getGhostSuggestion(code: String, cursorPosition: Int, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
         val prompt = buildString {
-            append("Explain this ${language.displayName} code in simple, beginner-friendly terms.\n\n")
-            append("```${language.displayName.lowercase()}\n$code\n```\n\n")
+            append("You are an inline code completion assistant for ${language.displayName}.\n")
+            append("Provide the next few lines of code to complete the user's thought.\n\n")
+            append("Current Code:\n")
+            append("```${language.displayName.lowercase()}\n")
+            append(code.substring(0, cursorPosition))
+            append("<CURSOR>")
+            append(code.substring(cursorPosition))
+            append("\n```\n\n")
+            append("Return ONLY the suggested code that should replace <CURSOR>. Do not include explanations or markdown blocks.")
+        }
+        val result = callGroqWithRetry(prompt, apiKey, model, extractCode = true)
+        return if (result.isSuccess) {
+            val suggestion = result.correctedCode ?: result.content
+            result.copy(content = suggestion.trim())
+        } else {
+            result
+        }
+    }
+    suspend fun explainCode(files: List<com.pocketdev.app.data.models.ProjectFile>, activeFileName: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+        val prompt = buildString {
+            append("Explain the code in simple, beginner-friendly terms.\n\n")
+            append(buildProjectContext(files, activeFileName))
             append("Break down what each part does step-by-step. ")
             append("Use simple language suitable for students who are learning to code. ")
             append("Include:\n")
@@ -45,25 +103,31 @@ class GroqRepository {
             append("3. Any important concepts used\n")
             append("4. Tips for beginners")
         }
-        return callGroqWithRetry(prompt, apiKey, model, extractCode = false)
+        return callGroqForMultiEdit(prompt, files, apiKey, model)
     }
 
-    suspend fun improveCode(code: String, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+    suspend fun improveCode(files: List<com.pocketdev.app.data.models.ProjectFile>, activeFileName: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
         val prompt = buildString {
-            append("Suggest improvements for this ${language.displayName} code.\n\n")
-            append("```${language.displayName.lowercase()}\n$code\n```\n\n")
+            append("Suggest improvements for this project.\n\n")
+            append(buildProjectContext(files, activeFileName))
             append("Focus on:\n")
-            append("1. Best practices for ${language.displayName}\n")
+            append("1. Best practices\n")
             append("2. Performance optimization\n")
             append("3. Code readability and maintainability\n")
             append("4. Error handling\n")
             append("5. Modern language features\n\n")
             append("Format your response as:\n")
             append("IMPROVEMENTS SUGGESTED:\n[list of improvements]\n\n")
-            append("IMPROVED CODE:\n```${language.displayName.lowercase()}\n[improved code]\n```\n\n")
-            append("EXPLANATION:\n[why these improvements matter]")
+            append("Then, provide the improvements as patches using the following format:\n")
+            append("FILE: main.kt\n")
+            append("EDIT_START: start_line_number\n")
+            append("EDIT_END: end_line_number\n")
+            append("NEW_CODE:\n")
+            append("new lines to replace them with\n")
+            append("EOF\n\n")
+            append("You can include multiple patches.\n")
         }
-        return callGroqWithRetry(prompt, apiKey, model)
+        return callGroqForMultiEdit(prompt, files, apiKey, model)
     }
 
     suspend fun autoFixCode(currentCode: String, error: String, historyText: String, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
@@ -76,21 +140,36 @@ class GroqRepository {
             }
             append("Task:\nFix the code so it runs correctly.\n\n")
             append("Rules:\n")
+            append("Return ONLY edits using the following patch format:\n")
+            append("FILE: main${language.extension}\n")
+            append("EDIT_START: start_line_number\n")
+            append("EDIT_END: end_line_number\n")
+            append("NEW_CODE:\n")
+            append("new lines to replace them with\n")
+            append("EOF\n\n")
+            append("You can include multiple patches.\n")
             append("First, provide a brief thought process explaining what went wrong and how you will fix it.\n")
-            append("Then, provide the corrected code inside a single code block.\n")
+            append("Then, provide the patches.\n")
             append("Avoid repeating previous failed fixes.")
         }
-        return callGroqWithRetry(prompt, apiKey, model)
+        val file = com.pocketdev.app.data.models.ProjectFile(name = "main${language.extension}", language = language, code = currentCode)
+        return callGroqForMultiEdit(prompt, listOf(file), apiKey, model)
     }
 
-    suspend fun modifyCode(prompt: String, code: String, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+    suspend fun modifyCode(prompt: String, files: List<com.pocketdev.app.data.models.ProjectFile>, activeFileName: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
         val fullPrompt = buildString {
-            append("You are an expert ${language.displayName} developer. I have the following code:\n\n")
-            append("```${language.displayName.lowercase()}\n$code\n```\n\n")
-            append("Please modify the code according to this request: $prompt\n\n")
-            append("Return ONLY the complete modified code inside a single code block. Do not include any other text, explanations, or markdown outside the code block. The code block must contain the full updated file so it can be directly pasted.")
+            append("You are an expert developer. Please modify the code according to this request: $prompt\n\n")
+            append(buildProjectContext(files, activeFileName))
+            append("Return ONLY edits using the following patch format:\n")
+            append("FILE: main.kt\n")
+            append("EDIT_START: start_line_number\n")
+            append("EDIT_END: end_line_number\n")
+            append("NEW_CODE:\n")
+            append("new lines to replace them with\n")
+            append("EOF\n\n")
+            append("You can include multiple patches.\n")
         }
-        return callGroqWithRetry(fullPrompt, apiKey, model)
+        return callGroqForMultiEdit(fullPrompt, files, apiKey, model)
     }
 
     suspend fun askFollowUp(previousPrompt: String, previousResponse: String, question: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
@@ -172,28 +251,27 @@ class GroqRepository {
         }
     }
 
-    suspend fun editCode(prompt: String, code: String, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+    suspend fun editCode(prompt: String, files: List<com.pocketdev.app.data.models.ProjectFile>, activeFileName: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
         val fullPrompt = buildString {
-            append("You are modifying a code file.\n\n")
+            append("You are modifying a project with multiple files.\n\n")
             append("Instruction:\n$prompt\n\n")
-            append("File:\n$code\n\n")
+            append(buildProjectContext(files, activeFileName))
             append("Rules:\n")
-            append("Return ONLY edits using SEARCH/REPLACE blocks.\n")
-            append("Use the following format:\n")
-            append("<<<<\n")
-            append("exact lines to replace from the original file\n")
-            append("====\n")
+            append("Return ONLY edits using the following patch format:\n")
+            append("FILE: filename.ext\n")
+            append("EDIT_START: start_line_number\n")
+            append("EDIT_END: end_line_number\n")
+            append("NEW_CODE:\n")
             append("new lines to replace them with\n")
-            append(">>>>\n\n")
-            append("The SEARCH block must match the original file exactly, including whitespace and indentation.\n")
-            append("You can include multiple SEARCH/REPLACE blocks.\n")
+            append("EOF\n\n")
+            append("You can include multiple patches.\n")
             append("Do not include explanations.\n")
         }
         
         var lastError = ""
         repeat(MAX_RETRIES) { attempt ->
             try {
-                val result = callGroqForEdit(fullPrompt, code, apiKey, model)
+                val result = callGroqForMultiEdit(fullPrompt, files, apiKey, model)
                 if (result.isSuccess) return result
                 lastError = result.errorMessage ?: "Unknown error"
                 if (lastError.contains("rate_limit", ignoreCase = true)) {
@@ -216,7 +294,7 @@ class GroqRepository {
         )
     }
 
-    private suspend fun callGroqForEdit(prompt: String, originalCode: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
+    private suspend fun callGroqForMultiEdit(prompt: String, originalFiles: List<com.pocketdev.app.data.models.ProjectFile>, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
         val truncatedPrompt = if (prompt.length > 20000) prompt.take(20000) + "\n...[truncated]" else prompt
         val request = ChatRequest(
             model = model,
@@ -240,50 +318,39 @@ class GroqRepository {
             val body = response.body()
             val content = body?.choices?.firstOrNull()?.message?.content.orEmpty()
             
-            var currentCode = originalCode
-            val blockRegex = Regex("<<<<\\n([\\s\\S]*?)\\n====\\n([\\s\\S]*?)\\n>>>>")
-            val matches = blockRegex.findAll(content).toList()
+            val patches = mutableListOf<com.pocketdev.app.data.models.FilePatch>()
+            val patchRegex = Regex("FILE:\\s*(.+)\\nEDIT_START:\\s*(\\d+)\\nEDIT_END:\\s*(\\d+)\\nNEW_CODE:\\n([\\s\\S]*?)\\nEOF")
+            val matches = patchRegex.findAll(content).toList()
             
             if (matches.isNotEmpty()) {
                 for (match in matches) {
-                    val searchBlock = match.groupValues[1]
-                    val replaceBlock = match.groupValues[2]
+                    val fileName = match.groupValues[1].trim()
+                    val editStart = match.groupValues[2].toIntOrNull() ?: continue
+                    val editEnd = match.groupValues[3].toIntOrNull() ?: continue
+                    val newCode = match.groupValues[4]
                     
-                    if (currentCode.contains(searchBlock)) {
-                        currentCode = currentCode.replaceFirst(searchBlock, replaceBlock)
-                    } else {
-                        // Fallback: try to match ignoring leading/trailing whitespace
-                        val trimmedSearch = searchBlock.trim()
-                        if (trimmedSearch.isNotEmpty() && currentCode.contains(trimmedSearch)) {
-                            currentCode = currentCode.replaceFirst(trimmedSearch, replaceBlock)
-                        }
-                    }
+                    patches.add(
+                        com.pocketdev.app.data.models.FilePatch(
+                            fileName = fileName,
+                            editStart = editStart,
+                            editEnd = editEnd,
+                            newCode = newCode
+                        )
+                    )
                 }
                 
                 AiResult(
                     content = content,
-                    correctedCode = currentCode,
                     isSuccess = true,
-                    isEdit = true
+                    isEdit = true,
+                    patches = patches
                 )
             } else {
-                // Fallback: If AI just returned the whole code block
-                val codeRegex = Regex("```(?:[a-zA-Z]*)\\n([\\s\\S]*?)\\n```")
-                val codeMatch = codeRegex.find(content)
-                if (codeMatch != null) {
-                    AiResult(
-                        content = content,
-                        correctedCode = codeMatch.groupValues[1].trim(),
-                        isSuccess = true,
-                        isEdit = true
-                    )
-                } else {
-                    AiResult(
-                        content = content,
-                        isSuccess = false,
-                        errorMessage = "AI response did not contain SEARCH/REPLACE blocks."
-                    )
-                }
+                AiResult(
+                    content = content,
+                    isSuccess = false,
+                    errorMessage = "AI response did not contain valid patches."
+                )
             }
         } else {
             val errorBody = response.errorBody()?.string() ?: ""

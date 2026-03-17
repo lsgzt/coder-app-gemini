@@ -21,12 +21,20 @@ data class ExecutionResult(
     }
 }
 
+data class FilePatch(
+    val fileName: String,
+    val editStart: Int,
+    val editEnd: Int,
+    val newCode: String
+)
+
 data class AiResult(
     val content: String,
     val correctedCode: String? = null,
     val isSuccess: Boolean = true,
     val errorMessage: String? = null,
-    val isEdit: Boolean = false
+    val isEdit: Boolean = false,
+    val patches: List<FilePatch> = emptyList()
 )
 
 sealed class UiState<out T> {

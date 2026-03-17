@@ -4,6 +4,7 @@ import android.content.Context
 import com.pocketdev.app.data.db.AppDatabase
 import com.pocketdev.app.data.models.Language
 import com.pocketdev.app.data.models.Project
+import com.pocketdev.app.data.models.ProjectFile
 import kotlinx.coroutines.flow.Flow
 
 class ProjectRepository(context: Context) {
@@ -24,10 +25,17 @@ class ProjectRepository(context: Context) {
         language: Language,
         code: String = getDefaultCode(language)
     ): Long {
+        val defaultFileName = "main${language.extension}"
+        val initialFile = ProjectFile(
+            name = defaultFileName,
+            language = language,
+            code = code
+        )
         val project = Project(
             name = name,
             language = language,
-            code = code,
+            code = code, // Keep for backward compatibility
+            files = listOf(initialFile),
             createdAt = System.currentTimeMillis(),
             modifiedAt = System.currentTimeMillis()
         )
@@ -44,7 +52,18 @@ class ProjectRepository(context: Context) {
     }
 
     suspend fun updateCode(projectId: Long, code: String) {
-        projectDao.updateProjectCode(projectId, code)
+        // This is deprecated, we should update files instead.
+        // But for backward compatibility, we'll update the first file if it exists.
+        val project = projectDao.getProjectById(projectId)
+        if (project != null) {
+            val updatedFiles = project.files.toMutableList()
+            if (updatedFiles.isNotEmpty()) {
+                updatedFiles[0] = updatedFiles[0].copy(code = code)
+            } else {
+                updatedFiles.add(ProjectFile(name = "main${project.language.extension}", language = project.language, code = code))
+            }
+            projectDao.updateProject(project.copy(code = code, files = updatedFiles, modifiedAt = System.currentTimeMillis()))
+        }
     }
 
     suspend fun deleteProject(project: Project) {

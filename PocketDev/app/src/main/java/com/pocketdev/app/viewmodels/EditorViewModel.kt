@@ -36,11 +36,17 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         terminalManager = terminalManager,
         updateCode = { newCode -> updateCode(newCode) },
         getApiKey = {
-            secureStorage.groqApiKey
+            secureStorage.getApiKey().first() ?: ""
         }
     )
 
     // Current editor state
+    private val _currentFiles = MutableStateFlow<List<ProjectFile>>(emptyList())
+    val currentFiles: StateFlow<List<ProjectFile>> = _currentFiles.asStateFlow()
+
+    private val _activeFileIndex = MutableStateFlow(0)
+    val activeFileIndex: StateFlow<Int> = _activeFileIndex.asStateFlow()
+
     private val _currentCode = MutableStateFlow("")
     val currentCode: StateFlow<String> = _currentCode.asStateFlow()
 
@@ -69,7 +75,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     // AI state
     private val _aiState = MutableStateFlow<UiState<AiResult>>(UiState.Idle)
-    val aiState: StateFlow<UiState<AiResult>> = _aiState.asStateFlow()
+    val aiState: StateFlow<UiState<AiResult>> = _aiState
+
+    private val _ghostSuggestion = MutableStateFlow<String?>(null)
+    val ghostSuggestion: StateFlow<String?> = _ghostSuggestion
+
+    private var ghostSuggestionJob: Job? = null.asStateFlow()
 
     // Save state
     private val _saveState = MutableStateFlow<UiState<Unit>>(UiState.Idle)
@@ -143,11 +154,40 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun updateCode(code: String) {
         _currentCode.value = code
         hasUnsavedChanges = true
+        
+        val files = _currentFiles.value.toMutableList()
+        val activeIndex = _activeFileIndex.value
+        if (activeIndex in files.indices) {
+            files[activeIndex] = files[activeIndex].copy(code = code)
+            _currentFiles.value = files
+        }
+
+        // Clear ghost suggestion but do not cancel the job, so it can run after typing
+        _ghostSuggestion.value = null
+
         saveJob?.cancel()
         saveJob = viewModelScope.launch {
             kotlinx.coroutines.delay(1000)
             prefsManager.setUnsavedCode(code)
         }
+    }
+
+    fun switchFile(index: Int) {
+        if (index in _currentFiles.value.indices) {
+            _activeFileIndex.value = index
+            val file = _currentFiles.value[index]
+            _currentCode.value = file.code
+            _currentLanguage.value = file.language
+            rejectGhostSuggestion()
+        }
+    }
+
+    fun addFile(name: String, language: Language) {
+        val newFile = ProjectFile(name = name, language = language, code = getDefaultCode(language))
+        val updatedFiles = _currentFiles.value + newFile
+        _currentFiles.value = updatedFiles
+        switchFile(updatedFiles.size - 1)
+        hasUnsavedChanges = true
     }
 
     fun setLanguage(language: Language) {
@@ -162,8 +202,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun loadProject(project: Project) {
-        _currentCode.value = project.code
-        _currentLanguage.value = project.language
+        _currentFiles.value = project.files
+        if (project.files.isNotEmpty()) {
+            _activeFileIndex.value = 0
+            _currentCode.value = project.files[0].code
+            _currentLanguage.value = project.files[0].language
+        } else {
+            _currentCode.value = project.code
+            _currentLanguage.value = project.language
+        }
         _currentProjectId.value = project.id
         _currentProjectName.value = project.name
         _executionState.value = UiState.Idle
@@ -177,7 +224,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun newFile(language: Language = Language.PYTHON) {
-        _currentCode.value = getDefaultCode(language)
+        val defaultCode = getDefaultCode(language)
+        val defaultFileName = "main${language.extension}"
+        val initialFile = ProjectFile(name = defaultFileName, language = language, code = defaultCode)
+        _currentFiles.value = listOf(initialFile)
+        _activeFileIndex.value = 0
+        _currentCode.value = defaultCode
         _currentLanguage.value = language
         _currentProjectId.value = null
         _currentProjectName.value = "Untitled"
@@ -279,6 +331,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                     name = projectName,
                     language = _currentLanguage.value,
                     code = _currentCode.value,
+                    files = _currentFiles.value,
                     modifiedAt = System.currentTimeMillis()
                 )
 
@@ -325,12 +378,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     // AI Features
     fun fixBug() {
-        callAiFeature { code, language, key, model ->
-            groqRepository.fixBug(code, language, key, model)
+        callAiFeature { files, activeFileName, key, model ->
+            groqRepository.fixBug(files, activeFileName, key, model)
         }
     }
 
     fun explainCode() {
+        val files = _currentFiles.value
+        val activeFileName = if (files.isNotEmpty()) files[_activeFileIndex.value].name else ""
         val code = _currentCode.value
         val language = _currentLanguage.value
         lastAiPrompt = buildString {
@@ -344,8 +399,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             append("3. Any important concepts used\n")
             append("4. Tips for beginners")
         }
-        callAiFeature { c, l, key, model ->
-            val result = groqRepository.explainCode(c, l, key, model)
+        callAiFeature { f, a, key, model ->
+            val result = groqRepository.explainCode(f, a, key, model)
             lastAiResult = result.content
             result
         }
@@ -375,8 +430,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun improveCode() {
-        callAiFeature { code, language, key, model ->
-            groqRepository.improveCode(code, language, key, model)
+        callAiFeature { files, activeFileName, key, model ->
+            groqRepository.improveCode(files, activeFileName, key, model)
         }
     }
 
@@ -403,17 +458,16 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             _aiState.value = UiState.Loading
             val model = prefsManager.aiModel.first()
             val result = groqRepository.modifyCode(prompt, code, language, apiKey, model)
-            if (result.isSuccess && result.correctedCode != null) {
-                _aiState.value = UiState.Success(result)
+            if (result.isSuccess && result.patches.isNotEmpty()) {
+                _aiState.value = UiState.Success(result.copy(isEdit = true))
             } else {
-                _aiState.value = UiState.Error(result.errorMessage ?: "AI request failed to generate code block")
+                _aiState.value = UiState.Error(result.errorMessage ?: "AI request failed to generate patches")
             }
         }
     }
 
     fun editCodeWithAi(prompt: String) {
-        val code = _currentCode.value
-        val language = _currentLanguage.value
+        val files = _currentFiles.value
 
         val apiKey = secureStorage.groqApiKey
         if (apiKey.isBlank()) {
@@ -433,29 +487,144 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             _aiState.value = UiState.Loading
             val model = prefsManager.aiModel.first()
-            val result = groqRepository.editCode(prompt, code, language, apiKey, model)
-            if (result.isSuccess && result.correctedCode != null && result.isEdit) {
+            val activeFileName = if (files.isNotEmpty()) files[_activeFileIndex.value].name else ""
+            val result = groqRepository.editCode(prompt, files, activeFileName, apiKey, model)
+            if (result.isSuccess && result.patches.isNotEmpty() && result.isEdit) {
                 _aiState.value = UiState.Success(result)
             } else {
-                _aiState.value = UiState.Error(result.errorMessage ?: "AI response did not contain EDIT_START and EDIT_END")
+                _aiState.value = UiState.Error(result.errorMessage ?: "AI response did not contain valid patches")
             }
         }
     }
 
+    fun getPreviewCode(fileName: String, result: AiResult): String {
+        val file = _currentFiles.value.find { it.name == fileName } ?: return ""
+        val patches = result.patches.filter { it.fileName == fileName }
+        if (patches.isEmpty()) return file.code
+        
+        val lines = file.code.lines().toMutableList()
+        // Apply patches in reverse order to avoid index shifting
+        val sortedPatches = patches.sortedByDescending { it.editStart }
+        
+        for (patch in sortedPatches) {
+            val startIndex = maxOf(0, patch.editStart - 1)
+            val endIndex = minOf(lines.size, patch.editEnd)
+            
+            if (startIndex <= endIndex) {
+                // Remove old lines
+                for (i in startIndex until endIndex) {
+                    if (startIndex < lines.size) {
+                        lines.removeAt(startIndex)
+                    }
+                }
+                
+                // Insert new lines
+                val newLines = patch.newCode.lines()
+                lines.addAll(startIndex, newLines)
+            }
+        }
+        
+        return lines.joinToString("\n")
+    }
+
+    fun requestGhostSuggestion(cursorPosition: Int) {
+        ghostSuggestionJob?.cancel()
+        ghostSuggestionJob = viewModelScope.launch {
+            delay(1000) // Wait for 1 second of inactivity
+            val code = _currentCode.value
+            val language = _currentLanguage.value
+            val apiKey = secureStorage.groqApiKey
+            if (apiKey.isBlank() || !NetworkUtils.isOnline(context)) return@launch
+
+            val model = prefsManager.aiModel.first()
+            val result = groqRepository.getGhostSuggestion(code, cursorPosition, language, apiKey, model)
+            if (result.isSuccess && result.content.isNotBlank()) {
+                _ghostSuggestion.value = result.content
+            }
+        }
+    }
+
+    fun acceptGhostSuggestion(cursorPosition: Int) {
+        val suggestion = _ghostSuggestion.value ?: return
+        val code = _currentCode.value
+        val newCode = code.substring(0, cursorPosition) + suggestion + code.substring(cursorPosition)
+        updateCode(newCode)
+        _ghostSuggestion.value = null
+    }
+
+    fun rejectGhostSuggestion() {
+        ghostSuggestionJob?.cancel()
+        _ghostSuggestion.value = null
+    }
+
+    fun clearGhostSuggestion() {
+        _ghostSuggestion.value = null
+    }
+
     fun applyAiEdit(result: AiResult) {
-        val newCode = result.correctedCode ?: return
-        _currentCode.value = newCode
+        val patches = result.patches
+        if (patches.isEmpty()) return
+        
+        val currentFiles = _currentFiles.value.toMutableList()
+        
+        // Group patches by file
+        val patchesByFile = patches.groupBy { it.fileName }
+        
+        for ((fileName, filePatches) in patchesByFile) {
+            val fileIndex = currentFiles.indexOfFirst { it.name == fileName }
+            if (fileIndex != -1) {
+                val file = currentFiles[fileIndex]
+                val lines = file.code.lines().toMutableList()
+                
+                // Apply patches in reverse order to avoid index shifting
+                val sortedPatches = filePatches.sortedByDescending { it.editStart }
+                
+                for (patch in sortedPatches) {
+                    // Convert 1-based line numbers to 0-based indices
+                    val startIndex = maxOf(0, patch.editStart - 1)
+                    val endIndex = minOf(lines.size, patch.editEnd)
+                    
+                    if (startIndex <= endIndex) {
+                        // Remove old lines
+                        for (i in startIndex until endIndex) {
+                            if (startIndex < lines.size) {
+                                lines.removeAt(startIndex)
+                            }
+                        }
+                        
+                        // Insert new lines
+                        val newLines = patch.newCode.lines()
+                        lines.addAll(startIndex, newLines)
+                    }
+                }
+                
+                val newCode = lines.joinToString("\n")
+                currentFiles[fileIndex] = file.copy(code = newCode)
+            }
+        }
+        
+        _currentFiles.value = currentFiles
+        
+        // Update current code if active file was modified
+        val activeIndex = _activeFileIndex.value
+        if (activeIndex in currentFiles.indices) {
+            _currentCode.value = currentFiles[activeIndex].code
+        }
+        
+        clearGhostSuggestion()
+        
+        hasUnsavedChanges = true
         saveProject()
         dismissAiResult()
     }
 
     private fun callAiFeature(
-        action: suspend (String, Language, String, String) -> AiResult
+        action: suspend (List<com.pocketdev.app.data.models.ProjectFile>, String, String, String) -> AiResult
     ) {
-        val code = _currentCode.value
-        val language = _currentLanguage.value
+        val files = _currentFiles.value
+        val activeFileName = if (files.isNotEmpty()) files[_activeFileIndex.value].name else ""
 
-        if (code.isBlank()) {
+        if (files.isEmpty()) {
             _aiState.value = UiState.Error("No code to analyze. Write some code first!")
             return
         }
@@ -478,7 +647,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             _aiState.value = UiState.Loading
             val model = prefsManager.aiModel.first()
-            val result = action(code, language, apiKey, model)
+            val result = action(files, activeFileName, apiKey, model)
             _aiState.value = if (result.isSuccess) {
                 UiState.Success(result)
             } else {
@@ -491,7 +660,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val code = _currentCode.value
         val language = _currentLanguage.value
         
-        terminalManager.appendOutput("> $message")
+        terminalManager.appendNormalMessage("> $message")
         terminalManager.appendStatusMessage("AI is thinking...")
         
         viewModelScope.launch {
@@ -501,8 +670,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 return@launch
             }
             
+            val prompt = buildString {
+                append("You are a helpful coding assistant.\n")
+                append("Current Code:\n```${language.displayName.lowercase()}\n$code\n```\n\n")
+                append("User Message:\n$message")
+            }
+            
             val model = prefsManager.aiModel.first()
-            val result = groqRepository.modifyCode(message, code, language, apiKey, model)
+            val result = groqRepository.explainCode(prompt, code, language, apiKey, model)
             if (result.isSuccess) {
                 terminalManager.appendAgentMessage(result.content)
             } else {

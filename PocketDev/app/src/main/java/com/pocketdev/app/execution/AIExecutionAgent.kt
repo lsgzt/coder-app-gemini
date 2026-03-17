@@ -52,18 +52,39 @@ class AIExecutionAgent(
 
                 val aiResult = groqRepository.autoFixCode(currentCode, result.error ?: "Unknown error", historyText, language, apiKey)
                 
-                if (aiResult.isSuccess && aiResult.correctedCode != null) {
-                    // Update history with AI fix
-                    history[history.size - 1] = currentAttempt.copy(aiFix = aiResult.correctedCode)
+                if (aiResult.isSuccess && aiResult.patches.isNotEmpty()) {
+                    // Apply patches
+                    val lines = currentCode.lines().toMutableList()
+                    val sortedPatches = aiResult.patches.sortedByDescending { it.editStart }
                     
-                    val thoughtProcess = aiResult.content.replace("```${language.displayName.lowercase()}\n${aiResult.correctedCode}\n```", "").trim()
+                    for (patch in sortedPatches) {
+                        val startIndex = maxOf(0, patch.editStart - 1)
+                        val endIndex = minOf(lines.size, patch.editEnd)
+                        
+                        if (startIndex <= endIndex) {
+                            for (i in startIndex until endIndex) {
+                                if (startIndex < lines.size) {
+                                    lines.removeAt(startIndex)
+                                }
+                            }
+                            val newLines = patch.newCode.lines()
+                            lines.addAll(startIndex, newLines)
+                        }
+                    }
+                    
+                    val newCode = lines.joinToString("\n")
+                    
+                    // Update history with AI fix
+                    history[history.size - 1] = currentAttempt.copy(aiFix = newCode)
+                    
+                    val thoughtProcess = aiResult.content.split("FILE:").firstOrNull()?.trim() ?: ""
                     if (thoughtProcess.isNotBlank()) {
                         terminalManager.appendAgentMessage("AI Thought Process:\n$thoughtProcess")
                     }
                     
-                    terminalManager.appendAgentMessage("AI Applied Fix:\n${aiResult.correctedCode}")
+                    terminalManager.appendAgentMessage("AI Applied Fixes.")
                     
-                    currentCode = aiResult.correctedCode
+                    currentCode = newCode
                     updateCode(currentCode)
                     terminalManager.appendStatusMessage("Running updated code...")
                 } else {
