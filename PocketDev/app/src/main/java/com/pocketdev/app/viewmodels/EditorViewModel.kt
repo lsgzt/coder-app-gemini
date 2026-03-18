@@ -80,6 +80,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _ghostSuggestion = MutableStateFlow<String?>(null)
     val ghostSuggestion: StateFlow<String?> = _ghostSuggestion
 
+    private val _ghostConfidence = MutableStateFlow<String>("MEDIUM")
+    val ghostConfidence: StateFlow<String> = _ghostConfidence
+
+    private val _diffSuggestion = MutableStateFlow<AiResult?>(null)
+    val diffSuggestion: StateFlow<AiResult?> = _diffSuggestion
+
     private var ghostSuggestionJob: Job? = null
 
     // Save state
@@ -530,7 +536,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun requestGhostSuggestion(cursorPosition: Int) {
         ghostSuggestionJob?.cancel()
         ghostSuggestionJob = viewModelScope.launch {
-            delay(1000) // Wait for 1 second of inactivity
+            delay(400) // Wait for 400ms of inactivity
             val code = _currentCode.value
             val language = _currentLanguage.value
             val apiKey = secureStorage.groqApiKey
@@ -539,7 +545,19 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             val model = prefsManager.aiModel.first()
             val result = groqRepository.getGhostSuggestion(code, cursorPosition, language, apiKey, model)
             if (result.isSuccess && result.content.isNotBlank()) {
-                _ghostSuggestion.value = result.content
+                if (result.confidence == "LOW") {
+                    // Do not auto-show low confidence suggestions
+                    _ghostSuggestion.value = null
+                    _diffSuggestion.value = null
+                } else if (result.isEdit || result.content.lines().size > 2) {
+                    // Show smart diff popup for complex edits
+                    _ghostSuggestion.value = null
+                    _diffSuggestion.value = result
+                } else {
+                    _ghostSuggestion.value = result.content
+                    _ghostConfidence.value = result.confidence
+                    _diffSuggestion.value = null
+                }
             }
         }
     }
@@ -552,13 +570,85 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _ghostSuggestion.value = null
     }
 
+    fun acceptGhostSuggestionLine(cursorPosition: Int): Int {
+        val suggestion = _ghostSuggestion.value ?: return 0
+        val code = _currentCode.value
+        
+        // Find the first newline in the suggestion
+        val newlineIndex = suggestion.indexOf('\n')
+        val lineToAccept = if (newlineIndex != -1) {
+            suggestion.substring(0, newlineIndex + 1)
+        } else {
+            suggestion
+        }
+        
+        val newCode = code.substring(0, cursorPosition) + lineToAccept + code.substring(cursorPosition)
+        updateCode(newCode)
+        
+        // Update the remaining suggestion
+        if (newlineIndex != -1 && newlineIndex + 1 < suggestion.length) {
+            _ghostSuggestion.value = suggestion.substring(newlineIndex + 1)
+        } else {
+            _ghostSuggestion.value = null
+        }
+        
+        return lineToAccept.length
+    }
+
+    fun acceptDiffSuggestion(cursorPosition: Int) {
+        val suggestion = _diffSuggestion.value ?: return
+        val code = _currentCode.value
+        
+        if (suggestion.isEdit) {
+            // For REPLACE type, we need to replace the current line or block
+            // A simple implementation: replace the current line
+            val lines = code.lines()
+            var currentLineIndex = 0
+            var charCount = 0
+            for (i in lines.indices) {
+                charCount += lines[i].length + 1 // +1 for newline
+                if (charCount > cursorPosition) {
+                    currentLineIndex = i
+                    break
+                }
+            }
+            
+            val newLines = lines.toMutableList()
+            newLines[currentLineIndex] = suggestion.content
+            updateCode(newLines.joinToString("\n"))
+        } else {
+            // For APPEND type but > 2 lines
+            val newCode = code.substring(0, cursorPosition) + suggestion.content + code.substring(cursorPosition)
+            updateCode(newCode)
+        }
+        
+        _diffSuggestion.value = null
+    }
+
+    fun rejectDiffSuggestion() {
+        _diffSuggestion.value = null
+    }
+
+    fun expandGhostToDiff() {
+        val suggestion = _ghostSuggestion.value ?: return
+        val confidence = _ghostConfidence.value
+        _ghostSuggestion.value = null
+        _diffSuggestion.value = AiResult(
+            content = suggestion,
+            confidence = confidence,
+            isEdit = false // It's an APPEND type since it was a ghost suggestion
+        )
+    }
+
     fun rejectGhostSuggestion() {
         ghostSuggestionJob?.cancel()
         _ghostSuggestion.value = null
+        _diffSuggestion.value = null
     }
 
     fun clearGhostSuggestion() {
         _ghostSuggestion.value = null
+        _diffSuggestion.value = null
     }
 
     fun applyAiEdit(result: AiResult) {

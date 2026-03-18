@@ -74,19 +74,34 @@ class GroqRepository {
     suspend fun getGhostSuggestion(code: String, cursorPosition: Int, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
         val prompt = buildString {
             append("You are an inline code completion assistant for ${language.displayName}.\n")
-            append("Provide the next few lines of code to complete the user's thought.\n\n")
+            append("Provide the next few lines of code to complete the user's thought.\n")
+            append("Also, detect and fix variable naming issues or logical errors in the surrounding context.\n\n")
             append("Current Code:\n")
             append("```${language.displayName.lowercase()}\n")
             append(code.substring(0, cursorPosition))
             append("<CURSOR>")
             append(code.substring(cursorPosition))
             append("\n```\n\n")
-            append("Return ONLY the suggested code that should replace <CURSOR>. Do not include explanations or markdown blocks.")
+            append("Return your response in the following format:\n")
+            append("CONFIDENCE: [HIGH/MEDIUM/LOW]\n")
+            append("TYPE: [APPEND/REPLACE]\n")
+            append("SUGGESTION:\n")
+            append("[your suggested code]\n\n")
+            append("If you are just adding new code at the cursor, use TYPE: APPEND and return only the new code.\n")
+            append("If you are modifying existing code around the cursor (e.g. fixing a bug or refactoring), use TYPE: REPLACE and return the complete modified code block that should replace the current line and surrounding lines. Do not include explanations or markdown blocks.")
         }
-        val result = callGroqWithRetry(prompt, apiKey, model, extractCode = true)
+        val result = callGroqWithRetry(prompt, apiKey, model, extractCode = false)
         return if (result.isSuccess) {
-            val suggestion = result.correctedCode ?: result.content
-            result.copy(content = suggestion.trim())
+            val content = result.content
+            val confidenceMatch = Regex("CONFIDENCE:\\s*(HIGH|MEDIUM|LOW)").find(content)
+            val typeMatch = Regex("TYPE:\\s*(APPEND|REPLACE)").find(content)
+            val suggestionMatch = Regex("SUGGESTION:\\n([\\s\\S]*)").find(content)
+            
+            val confidence = confidenceMatch?.groupValues?.get(1) ?: "MEDIUM"
+            val type = typeMatch?.groupValues?.get(1) ?: "APPEND"
+            val suggestion = suggestionMatch?.groupValues?.get(1)?.trim() ?: content.trim()
+            
+            result.copy(content = suggestion, confidence = confidence, isEdit = (type == "REPLACE"))
         } else {
             result
         }

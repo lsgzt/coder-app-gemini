@@ -49,6 +49,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import java.io.BufferedReader
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.Key
@@ -473,6 +476,8 @@ fun EditorScreen(
                     } else {
                         Box(modifier = Modifier.fillMaxSize()) {
                             val ghostSuggestion by viewModel.ghostSuggestion.collectAsState()
+                            val ghostConfidence by viewModel.ghostConfidence.collectAsState()
+                            val diffSuggestion by viewModel.diffSuggestion.collectAsState()
                             CodeEditor(
                                 code = code,
                                 language = language,
@@ -481,21 +486,34 @@ fun EditorScreen(
                                 wordWrap = wordWrap,
                                 autocompleteEnabled = autocompleteEnabled,
                                 ghostSuggestion = ghostSuggestion,
+                                ghostConfidence = ghostConfidence,
                                 onCodeChange = {
                                     viewModel.updateCode(it)
                                 },
                                 selection = selection,
                                 onSelectionChange = { 
                                     selection = it 
-                                    if (ghostSuggestion != null) viewModel.rejectGhostSuggestion()
+                                    if (ghostSuggestion != null || diffSuggestion != null) viewModel.rejectGhostSuggestion()
                                     viewModel.requestGhostSuggestion(it.start)
                                 },
                                 onRejectGhostSuggestion = {
                                     viewModel.rejectGhostSuggestion()
                                 },
+                                onAcceptGhostSuggestionLine = {
+                                    val length = viewModel.acceptGhostSuggestionLine(selection.start)
+                                    selection = androidx.compose.ui.text.TextRange(selection.start + length)
+                                },
+                                onAcceptGhostSuggestionFull = {
+                                    viewModel.acceptGhostSuggestion(selection.start)
+                                    selection = androidx.compose.ui.text.TextRange(selection.start + ghostSuggestion!!.length)
+                                },
+                                onExpandGhostSuggestion = {
+                                    viewModel.expandGhostToDiff()
+                                },
                                 modifier = Modifier.fillMaxSize()
                             )
-                            if (ghostSuggestion != null) {
+                            
+                            if (diffSuggestion != null) {
                                 Surface(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -511,22 +529,37 @@ fun EditorScreen(
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("AI Suggestion", style = MaterialTheme.typography.titleSmall)
+                                            Text("Smart Diff Suggestion", style = MaterialTheme.typography.titleSmall)
                                             Row {
                                                 TextButton(onClick = { 
-                                                    val newCode = code.substring(0, selection.start) + ghostSuggestion!! + code.substring(selection.start)
-                                                    viewModel.updateCode(newCode)
-                                                    selection = androidx.compose.ui.text.TextRange(selection.start + ghostSuggestion!!.length)
-                                                    viewModel.rejectGhostSuggestion()
+                                                    viewModel.acceptDiffSuggestion(selection.start)
                                                 }) {
-                                                    Text("Accept (Tab)")
+                                                    Text("Accept")
                                                 }
-                                                TextButton(onClick = { viewModel.rejectGhostSuggestion() }) {
-                                                    Text("Reject (Esc)")
+                                                TextButton(onClick = { viewModel.rejectDiffSuggestion() }) {
+                                                    Text("Reject")
                                                 }
                                             }
                                         }
-                                        val newCode = code.substring(0, selection.start) + ghostSuggestion + code.substring(selection.start)
+                                        
+                                        val newCode = if (diffSuggestion!!.isEdit) {
+                                            val lines = code.lines()
+                                            var currentLineIndex = 0
+                                            var charCount = 0
+                                            for (i in lines.indices) {
+                                                charCount += lines[i].length + 1
+                                                if (charCount > selection.start) {
+                                                    currentLineIndex = i
+                                                    break
+                                                }
+                                            }
+                                            val newLines = lines.toMutableList()
+                                            newLines[currentLineIndex] = diffSuggestion!!.content
+                                            newLines.joinToString("\n")
+                                        } else {
+                                            code.substring(0, selection.start) + diffSuggestion!!.content + code.substring(selection.start)
+                                        }
+                                        
                                         DiffViewer(
                                             originalCode = code,
                                             newCode = newCode,
@@ -800,10 +833,14 @@ fun CodeEditor(
     wordWrap: Boolean = false,
     autocompleteEnabled: Boolean = true,
     ghostSuggestion: String? = null,
+    ghostConfidence: String = "MEDIUM",
     onCodeChange: (String) -> Unit,
     selection: androidx.compose.ui.text.TextRange,
     onSelectionChange: (androidx.compose.ui.text.TextRange) -> Unit,
     onRejectGhostSuggestion: () -> Unit = {},
+    onAcceptGhostSuggestionLine: () -> Unit = {},
+    onAcceptGhostSuggestionFull: () -> Unit = {},
+    onExpandGhostSuggestion: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var textFieldValue by remember {
@@ -831,7 +868,7 @@ fun CodeEditor(
 
     var highlightedCode by remember { mutableStateOf(androidx.compose.ui.text.AnnotatedString(textFieldValue.text)) }
 
-    LaunchedEffect(textFieldValue.text, language, ghostSuggestion, textFieldValue.selection) {
+    LaunchedEffect(textFieldValue.text, language, ghostSuggestion, ghostConfidence, textFieldValue.selection) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             val newHighlight = SyntaxHighlighter.highlight(textFieldValue.text, language)
             
@@ -839,7 +876,14 @@ fun CodeEditor(
                 val cursor = textFieldValue.selection.start.coerceIn(0, textFieldValue.text.length)
                 val builder = androidx.compose.ui.text.AnnotatedString.Builder()
                 builder.append(newHighlight.subSequence(0, cursor))
-                builder.withStyle(SpanStyle(color = Color.Gray.copy(alpha = 0.6f), fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) {
+                
+                val alpha = when (ghostConfidence) {
+                    "HIGH" -> 0.8f
+                    "LOW" -> 0.3f
+                    else -> 0.5f // MEDIUM
+                }
+                
+                builder.withStyle(SpanStyle(color = Color.Gray.copy(alpha = alpha), fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) {
                     append(ghostSuggestion)
                 }
                 builder.append(newHighlight.subSequence(cursor, newHighlight.length))
@@ -957,6 +1001,35 @@ fun CodeEditor(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(8.dp)
+                        .pointerInput(ghostSuggestion) {
+                            if (ghostSuggestion != null) {
+                                var totalDrag = 0f
+                                detectHorizontalDragGestures(
+                                    onDragStart = { totalDrag = 0f },
+                                    onDragEnd = {
+                                        if (totalDrag > 100f) {
+                                            onAcceptGhostSuggestionFull()
+                                        } else if (totalDrag > 30f) {
+                                            onAcceptGhostSuggestionLine()
+                                        } else if (totalDrag < -30f) {
+                                            onRejectGhostSuggestion()
+                                        }
+                                    }
+                                ) { change, dragAmount ->
+                                    change.consume()
+                                    totalDrag += dragAmount
+                                }
+                            }
+                        }
+                        .pointerInput(ghostSuggestion, "tap") {
+                            if (ghostSuggestion != null) {
+                                detectTapGestures(
+                                    onTap = {
+                                        onExpandGhostSuggestion()
+                                    }
+                                )
+                            }
+                        }
                         .onKeyEvent { keyEvent ->
                             if (keyEvent.type == KeyEventType.KeyDown) {
                                 if (keyEvent.key == Key.Tab && ghostSuggestion != null) {
