@@ -72,33 +72,100 @@ class GroqRepository {
     }
 
     suspend fun getGhostSuggestion(code: String, cursorPosition: Int, language: Language, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
-        val prompt = buildString {
-            append("You are an inline code completion assistant for ${language.displayName}.\n")
-            append("Provide the next few lines of code to complete the user's thought.\n")
-            append("Also, detect and fix variable naming issues or logical errors in the surrounding context.\n\n")
-            append("Current Code:\n")
-            append("```${language.displayName.lowercase()}\n")
-            append(code.substring(0, cursorPosition))
-            append("<CURSOR>")
-            append(code.substring(cursorPosition))
-            append("\n```\n\n")
-            append("Return your response in the following format:\n")
-            append("TYPE: [APPEND/REPLACE]\n")
-            append("SUGGESTION:\n")
-            append("[your suggested code]\n\n")
-            append("If you are just adding new code at the cursor, use TYPE: APPEND and return only the new code.\n")
-            append("If you are modifying existing code around the cursor (e.g. fixing a bug or refactoring), use TYPE: REPLACE and return the complete modified code block that should replace the current line and surrounding lines. Do not include explanations or markdown blocks.")
+        // Get context around cursor for better understanding
+        val lines = code.lines()
+        var currentLineIndex = 0
+        var charCount = 0
+        for (i in lines.indices) {
+            charCount += lines[i].length + 1
+            if (charCount > cursorPosition) {
+                currentLineIndex = i
+                break
+            }
         }
+        
+        // Get current line and surrounding context
+        val currentLine = if (currentLineIndex < lines.size) lines[currentLineIndex] else ""
+        val cursorPosInLine = cursorPosition - (charCount - lines[currentLineIndex].length - 1)
+        val textBeforeCursorInLine = currentLine.substring(0, minOf(cursorPosInLine, currentLine.length))
+        val textAfterCursorInLine = if (cursorPosInLine < currentLine.length) currentLine.substring(cursorPosInLine) else ""
+        
+        val prompt = buildString {
+            append("You are a precise code completion assistant for ${language.displayName}.\n")
+            append("Your task is to suggest the most likely completion based on the context.\n\n")
+            
+            append("CONTEXT:\n")
+            append("- Current line: \"$currentLine\"\n")
+            append("- Cursor position: after \"$textBeforeCursorInLine\"\n")
+            append("- Text after cursor on same line: \"$textAfterCursorInLine\"\n\n")
+            
+            append("SURROUNDING CODE:\n")
+            append("```${language.displayName.lowercase()}\n")
+            // Show 10 lines before and after for context
+            val startLine = maxOf(0, currentLineIndex - 10)
+            val endLine = minOf(lines.size, currentLineIndex + 5)
+            for (i in startLine until endLine) {
+                if (i == currentLineIndex) {
+                    append("${lines[i].substring(0, minOf(cursorPosInLine, lines[i].length))}<|CURSOR|>${if (cursorPosInLine < lines[i].length) lines[i].substring(cursorPosInLine) else ""}\n")
+                } else {
+                    append("${lines[i]}\n")
+                }
+            }
+            append("```\n\n")
+            
+            append("RULES:\n")
+            append("1. Only suggest completions that are contextually relevant\n")
+            append("2. For method calls, suggest the most common/likely method\n")
+            append("3. For variable names, use existing variables in scope\n")
+            append("4. Keep suggestions SHORT - typically 1-3 words or a single method call\n")
+            append("5. Do NOT suggest entire blocks of code unless truly necessary\n")
+            append("6. Consider the language syntax and common patterns\n\n")
+            
+            append("RESPONSE FORMAT (strict):\n")
+            append("TYPE: APPEND\n")
+            append("SUGGESTION: [your short suggestion here]\n\n")
+            append("OR for fixing/modifying the current line:\n")
+            append("TYPE: REPLACE\n")
+            append("DELETE: [text to delete - the part that's wrong]\n")
+            append("ADD: [text to add - the correction]\n\n")
+            append("Examples:\n")
+            append("- If user typed 'fruits = [\"apple\", \"banana\"]\\nfruits.' suggest '.append(' or '.sort()'\n")
+            append("- If user typed 'print(' suggest the variable name or closing ')'\n")
+            append("- If there's a typo like 'printl' suggest DELETE: printl, ADD: println\n")
+        }
+        
         val result = callGroqWithRetry(prompt, apiKey, model, extractCode = false)
         return if (result.isSuccess) {
             val content = result.content
             val typeMatch = Regex("TYPE:\\s*(APPEND|REPLACE)").find(content)
-            val suggestionMatch = Regex("SUGGESTION:\\n([\\s\\S]*)").find(content)
-            
             val type = typeMatch?.groupValues?.get(1) ?: "APPEND"
-            val suggestion = suggestionMatch?.groupValues?.get(1)?.trim() ?: content.trim()
             
-            result.copy(content = suggestion, isEdit = (type == "REPLACE"))
+            if (type == "REPLACE") {
+                // Parse DELETE and ADD sections
+                val deleteMatch = Regex("DELETE:\\s*(.+?)(?=\\nADD:|\\nTYPE:|$)", RegexOption.DOT_MATCHES_ALL).find(content)
+                val addMatch = Regex("ADD:\\s*(.+?)(?=\\nTYPE:|$)", RegexOption.DOT_MATCHES_ALL).find(content)
+                
+                val deleteText = deleteMatch?.groupValues?.get(1)?.trim() ?: ""
+                val addText = addMatch?.groupValues?.get(1)?.trim() ?: ""
+                
+                // Find the position of the text to delete
+                val deletePos = code.indexOf(deleteText, maxOf(0, cursorPosition - deleteText.length - 50))
+                val actualDeletePos = if (deletePos >= 0) deletePos else cursorPosition
+                
+                result.copy(
+                    content = addText,
+                    isEdit = true,
+                    deleteText = deleteText,
+                    addText = addText,
+                    editStartPos = actualDeletePos,
+                    editEndPos = actualDeletePos + deleteText.length
+                )
+            } else {
+                // Simple APPEND type
+                val suggestionMatch = Regex("SUGGESTION:\\s*(.+?)(?=\\nTYPE:|$)", RegexOption.DOT_MATCHES_ALL).find(content)
+                val suggestion = suggestionMatch?.groupValues?.get(1)?.trim() ?: content.trim()
+                result.copy(content = suggestion, isEdit = false)
+            }
         } else {
             result
         }

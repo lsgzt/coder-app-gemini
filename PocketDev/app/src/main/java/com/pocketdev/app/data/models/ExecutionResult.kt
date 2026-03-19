@@ -34,7 +34,12 @@ data class AiResult(
     val isSuccess: Boolean = true,
     val errorMessage: String? = null,
     val isEdit: Boolean = false,
-    val patches: List<FilePatch> = emptyList()
+    val patches: List<FilePatch> = emptyList(),
+    // Inline diff fields for ghost suggestions
+    val deleteText: String? = null,  // Text to be deleted (shown in red)
+    val addText: String? = null,     // Text to be added (shown in green)
+    val editStartPos: Int = 0,       // Position where edit starts
+    val editEndPos: Int = 0          // Position where edit ends (for deletion)
 )
 
 sealed class UiState<out T> {

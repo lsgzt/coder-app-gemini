@@ -476,7 +476,7 @@ fun EditorScreen(
                     } else {
                         Box(modifier = Modifier.fillMaxSize()) {
                             val ghostSuggestion by viewModel.ghostSuggestion.collectAsState()
-                            val diffSuggestion by viewModel.diffSuggestion.collectAsState()
+                            val inlineDiffSuggestion by viewModel.inlineDiffSuggestion.collectAsState()
                             CodeEditor(
                                 code = code,
                                 language = language,
@@ -485,14 +485,14 @@ fun EditorScreen(
                                 wordWrap = wordWrap,
                                 autocompleteEnabled = autocompleteEnabled,
                                 ghostSuggestion = ghostSuggestion,
-                                ghostConfidence = "MEDIUM",
+                                inlineDiffSuggestion = inlineDiffSuggestion,
                                 onCodeChange = {
                                     viewModel.updateCode(it)
                                 },
                                 selection = selection,
                                 onSelectionChange = { 
                                     selection = it 
-                                    if (ghostSuggestion != null || diffSuggestion != null) viewModel.rejectGhostSuggestion()
+                                    if (ghostSuggestion != null || inlineDiffSuggestion != null) viewModel.rejectGhostSuggestion()
                                     viewModel.requestGhostSuggestion(it.start)
                                 },
                                 onRejectGhostSuggestion = {
@@ -506,68 +506,18 @@ fun EditorScreen(
                                     viewModel.acceptGhostSuggestion(selection.start)
                                     selection = androidx.compose.ui.text.TextRange(selection.start + ghostSuggestion!!.length)
                                 },
-                                onExpandGhostSuggestion = {
-                                    viewModel.expandGhostToDiff()
+                                onAcceptInlineDiff = {
+                                    val length = viewModel.acceptInlineDiffSuggestion()
+                                    if (length > 0) {
+                                        val newSelection = viewModel.currentCode.value.indexOf(inlineDiffSuggestion!!.addText!!)
+                                        if (newSelection >= 0) {
+                                            selection = androidx.compose.ui.text.TextRange(newSelection + length)
+                                        }
+                                    }
                                 },
                                 modifier = Modifier.fillMaxSize()
                             )
-                            
-                            if (diffSuggestion != null) {
-                                Surface(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .align(Alignment.BottomCenter)
-                                        .padding(16.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    shape = MaterialTheme.shapes.medium,
-                                    shadowElevation = 8.dp
-                                ) {
-                                    Column(modifier = Modifier.padding(8.dp)) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text("Smart Diff Suggestion", style = MaterialTheme.typography.titleSmall)
-                                            Row {
-                                                TextButton(onClick = { 
-                                                    viewModel.acceptDiffSuggestion(selection.start)
-                                                }) {
-                                                    Text("Accept")
-                                                }
-                                                TextButton(onClick = { viewModel.rejectDiffSuggestion() }) {
-                                                    Text("Reject")
-                                                }
-                                            }
-                                        }
-                                        
-                                        val newCode = if (diffSuggestion!!.isEdit) {
-                                            val lines = code.lines()
-                                            var currentLineIndex = 0
-                                            var charCount = 0
-                                            for (i in lines.indices) {
-                                                charCount += lines[i].length + 1
-                                                if (charCount > selection.start) {
-                                                    currentLineIndex = i
-                                                    break
-                                                }
-                                            }
-                                            val newLines = lines.toMutableList()
-                                            newLines[currentLineIndex] = diffSuggestion!!.content
-                                            newLines.joinToString("\n")
-                                        } else {
-                                            code.substring(0, selection.start) + diffSuggestion!!.content + code.substring(selection.start)
-                                        }
-                                        
-                                        DiffViewer(
-                                            originalCode = code,
-                                            newCode = newCode,
-                                            fontSize = fontSize,
-                                            modifier = Modifier.heightIn(max = 200.dp).fillMaxWidth()
-                                        )
-                                    }
-                                }
-                            }
+                            // No more popup - suggestions are shown inline
                         }
                     }
                 }
@@ -832,14 +782,14 @@ fun CodeEditor(
     wordWrap: Boolean = false,
     autocompleteEnabled: Boolean = true,
     ghostSuggestion: String? = null,
-    ghostConfidence: String = "MEDIUM",
+    inlineDiffSuggestion: AiResult? = null,
     onCodeChange: (String) -> Unit,
     selection: androidx.compose.ui.text.TextRange,
     onSelectionChange: (androidx.compose.ui.text.TextRange) -> Unit,
     onRejectGhostSuggestion: () -> Unit = {},
     onAcceptGhostSuggestionLine: () -> Unit = {},
     onAcceptGhostSuggestionFull: () -> Unit = {},
-    onExpandGhostSuggestion: () -> Unit = {},
+    onAcceptInlineDiff: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var textFieldValue by remember {
@@ -867,25 +817,54 @@ fun CodeEditor(
 
     var highlightedCode by remember { mutableStateOf(androidx.compose.ui.text.AnnotatedString(textFieldValue.text)) }
 
-    LaunchedEffect(textFieldValue.text, language, ghostSuggestion, ghostConfidence, textFieldValue.selection) {
+    LaunchedEffect(textFieldValue.text, language, ghostSuggestion, inlineDiffSuggestion, textFieldValue.selection) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             val newHighlight = SyntaxHighlighter.highlight(textFieldValue.text, language)
             
             if (ghostSuggestion != null) {
+                // Simple APPEND type - show in gray
                 val cursor = textFieldValue.selection.start.coerceIn(0, textFieldValue.text.length)
                 val builder = androidx.compose.ui.text.AnnotatedString.Builder()
                 builder.append(newHighlight.subSequence(0, cursor))
                 
-                val alpha = when (ghostConfidence) {
-                    "HIGH" -> 0.8f
-                    "LOW" -> 0.3f
-                    else -> 0.5f // MEDIUM
-                }
-                
-                builder.withStyle(SpanStyle(color = Color.Gray.copy(alpha = alpha), fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) {
+                builder.withStyle(SpanStyle(
+                    color = Color(0xFF888888),
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                )) {
                     append(ghostSuggestion)
                 }
                 builder.append(newHighlight.subSequence(cursor, newHighlight.length))
+                highlightedCode = builder.toAnnotatedString()
+            } else if (inlineDiffSuggestion != null && inlineDiffSuggestion.deleteText != null && inlineDiffSuggestion.addText != null) {
+                // REPLACE type - show inline diff with red (deletion) and green (addition)
+                val builder = androidx.compose.ui.text.AnnotatedString.Builder()
+                val deleteStart = inlineDiffSuggestion.editStartPos.coerceIn(0, textFieldValue.text.length)
+                val deleteEnd = inlineDiffSuggestion.editEndPos.coerceIn(0, textFieldValue.text.length)
+                
+                // Text before the deletion
+                builder.append(newHighlight.subSequence(0, deleteStart))
+                
+                // Deleted text in red with strikethrough
+                if (deleteEnd > deleteStart) {
+                    builder.withStyle(SpanStyle(
+                        color = Color(0xFFE53935), // Red
+                        background = Color(0x33FFCDD2), // Light red background
+                        textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough
+                    )) {
+                        append(textFieldValue.text.substring(deleteStart, deleteEnd))
+                    }
+                }
+                
+                // Added text in green
+                builder.withStyle(SpanStyle(
+                    color = Color(0xFF2E7D32), // Green
+                    background = Color(0x33C8E6C9) // Light green background
+                )) {
+                    append(inlineDiffSuggestion.addText)
+                }
+                
+                // Text after the deletion
+                builder.append(newHighlight.subSequence(deleteEnd, newHighlight.length))
                 highlightedCode = builder.toAnnotatedString()
             } else {
                 highlightedCode = newHighlight
@@ -1000,17 +979,29 @@ fun CodeEditor(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(8.dp)
-                        .pointerInput(ghostSuggestion) {
-                            if (ghostSuggestion != null) {
+                        .pointerInput(ghostSuggestion, inlineDiffSuggestion) {
+                            // Handle both ghost suggestion and inline diff
+                            if (ghostSuggestion != null || inlineDiffSuggestion != null) {
                                 var totalDrag = 0f
                                 detectHorizontalDragGestures(
                                     onDragStart = { totalDrag = 0f },
                                     onDragEnd = {
                                         if (totalDrag > 100f) {
-                                            onAcceptGhostSuggestionFull()
+                                            // Swipe right to accept
+                                            if (ghostSuggestion != null) {
+                                                onAcceptGhostSuggestionFull()
+                                            } else if (inlineDiffSuggestion != null) {
+                                                onAcceptInlineDiff()
+                                            }
                                         } else if (totalDrag > 30f) {
-                                            onAcceptGhostSuggestionLine()
+                                            // Small swipe right - accept line
+                                            if (ghostSuggestion != null) {
+                                                onAcceptGhostSuggestionLine()
+                                            } else if (inlineDiffSuggestion != null) {
+                                                onAcceptInlineDiff()
+                                            }
                                         } else if (totalDrag < -30f) {
+                                            // Swipe left to reject
                                             onRejectGhostSuggestion()
                                         }
                                     }
@@ -1020,25 +1011,23 @@ fun CodeEditor(
                                 }
                             }
                         }
-                        .pointerInput(ghostSuggestion, "tap") {
-                            if (ghostSuggestion != null) {
-                                detectTapGestures(
-                                    onTap = {
-                                        onExpandGhostSuggestion()
-                                    }
-                                )
-                            }
-                        }
                         .onKeyEvent { keyEvent ->
                             if (keyEvent.type == KeyEventType.KeyDown) {
-                                if (keyEvent.key == Key.Tab && ghostSuggestion != null) {
-                                    val newCode = textFieldValue.text.substring(0, textFieldValue.selection.start) + ghostSuggestion!! + textFieldValue.text.substring(textFieldValue.selection.start)
-                                    onCodeChange(newCode)
-                                    val newCursor = textFieldValue.selection.start + ghostSuggestion!!.length
-                                    onSelectionChange(androidx.compose.ui.text.TextRange(newCursor))
-                                    return@onKeyEvent true
+                                // Tab to accept suggestion
+                                if (keyEvent.key == Key.Tab) {
+                                    if (ghostSuggestion != null) {
+                                        val newCode = textFieldValue.text.substring(0, textFieldValue.selection.start) + ghostSuggestion!! + textFieldValue.text.substring(textFieldValue.selection.start)
+                                        onCodeChange(newCode)
+                                        val newCursor = textFieldValue.selection.start + ghostSuggestion!!.length
+                                        onSelectionChange(androidx.compose.ui.text.TextRange(newCursor))
+                                        return@onKeyEvent true
+                                    } else if (inlineDiffSuggestion != null) {
+                                        onAcceptInlineDiff()
+                                        return@onKeyEvent true
+                                    }
                                 }
-                                if (keyEvent.key == Key.Escape && ghostSuggestion != null) {
+                                // Escape to reject suggestion
+                                if (keyEvent.key == Key.Escape && (ghostSuggestion != null || inlineDiffSuggestion != null)) {
                                     onRejectGhostSuggestion()
                                     return@onKeyEvent true
                                 }

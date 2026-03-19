@@ -80,6 +80,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _ghostSuggestion = MutableStateFlow<String?>(null)
     val ghostSuggestion: StateFlow<String?> = _ghostSuggestion
 
+    // Inline diff suggestion (for REPLACE type edits)
+    private val _inlineDiffSuggestion = MutableStateFlow<AiResult?>(null)
+    val inlineDiffSuggestion: StateFlow<AiResult?> = _inlineDiffSuggestion
+
+    // Keep for backward compatibility but mark as deprecated
+    @Deprecated("Use inlineDiffSuggestion instead")
     private val _diffSuggestion = MutableStateFlow<AiResult?>(null)
     val diffSuggestion: StateFlow<AiResult?> = _diffSuggestion
 
@@ -543,7 +549,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         ghostSuggestionJob?.cancel()
         ghostSuggestionJob = viewModelScope.launch {
             if (!prefsManager.ghostSuggestions.first()) return@launch
-            delay(400) // Wait for 400ms of inactivity
+            delay(500) // Wait for 500ms of inactivity for better UX
             val code = _currentCode.value
             val language = _currentLanguage.value
             val apiKey = secureStorage.groqApiKey
@@ -552,12 +558,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             val model = prefsManager.aiModel.first()
             val result = groqRepository.getGhostSuggestion(code, cursorPosition, language, apiKey, model)
             if (result.isSuccess && result.content.isNotBlank()) {
-                if (result.isEdit || result.content.lines().size > 2) {
-                    // Show smart diff popup for complex edits
+                if (result.isEdit && result.deleteText != null && result.addText != null) {
+                    // REPLACE type with inline diff - show directly in editor
                     _ghostSuggestion.value = null
-                    _diffSuggestion.value = result
+                    _inlineDiffSuggestion.value = result
+                    _diffSuggestion.value = null // No popup
                 } else {
+                    // APPEND type - simple ghost text in gray
                     _ghostSuggestion.value = result.content
+                    _inlineDiffSuggestion.value = null
                     _diffSuggestion.value = null
                 }
             }
@@ -629,6 +638,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun rejectDiffSuggestion() {
         _diffSuggestion.value = null
+        _inlineDiffSuggestion.value = null
     }
 
     fun expandGhostToDiff() {
@@ -640,15 +650,33 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
+    fun acceptInlineDiffSuggestion(): Int {
+        val suggestion = _inlineDiffSuggestion.value ?: return 0
+        val code = _currentCode.value
+        
+        if (suggestion.deleteText != null && suggestion.addText != null) {
+            // Replace the deleteText with addText
+            val deletePos = suggestion.editStartPos
+            val newCode = code.substring(0, deletePos) + suggestion.addText + code.substring(suggestion.editEndPos)
+            updateCode(newCode)
+            _inlineDiffSuggestion.value = null
+            return suggestion.addText.length
+        }
+        _inlineDiffSuggestion.value = null
+        return 0
+    }
+
     fun rejectGhostSuggestion() {
         ghostSuggestionJob?.cancel()
         _ghostSuggestion.value = null
         _diffSuggestion.value = null
+        _inlineDiffSuggestion.value = null
     }
 
     fun clearGhostSuggestion() {
         _ghostSuggestion.value = null
         _diffSuggestion.value = null
+        _inlineDiffSuggestion.value = null
     }
 
     fun applyAiEdit(result: AiResult) {
