@@ -476,7 +476,6 @@ fun EditorScreen(
                     } else {
                         Box(modifier = Modifier.fillMaxSize()) {
                             val ghostSuggestion by viewModel.ghostSuggestion.collectAsState()
-                            val ghostConfidence by viewModel.ghostConfidence.collectAsState()
                             val diffSuggestion by viewModel.diffSuggestion.collectAsState()
                             CodeEditor(
                                 code = code,
@@ -486,7 +485,7 @@ fun EditorScreen(
                                 wordWrap = wordWrap,
                                 autocompleteEnabled = autocompleteEnabled,
                                 ghostSuggestion = ghostSuggestion,
-                                ghostConfidence = ghostConfidence,
+                                ghostConfidence = "MEDIUM",
                                 onCodeChange = {
                                     viewModel.updateCode(it)
                                 },
