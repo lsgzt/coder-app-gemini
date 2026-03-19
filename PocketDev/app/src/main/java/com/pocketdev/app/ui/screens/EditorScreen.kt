@@ -866,7 +866,7 @@ fun CodeEditor(
     }
 
     // Track visual line count for word wrap mode
-    var visualLineInfo by remember { mutableStateOf(Pair(1, mapOf<Int, Int>())) }
+    var visualLineInfo by remember { mutableStateOf(Pair(1, emptyMap<Int, Int>())) }
 
     Box(modifier = modifier) {
         Row(
@@ -881,7 +881,7 @@ fun CodeEditor(
                 
                 // For word wrap, show line numbers based on visual lines
                 // Each visual line shows the logical line number it belongs to
-                val (visualCount, lineMapping) = if (wordWrap) visualLineInfo else Pair(logicalLines, emptyMap())
+                val (visualCount, lineMapping) = if (wordWrap) visualLineInfo else Pair(logicalLines, emptyMap<Int, Int>())
                 
                 val lineNumbersText = if (wordWrap && lineMapping.isNotEmpty()) {
                     // Show logical line numbers for each visual line
