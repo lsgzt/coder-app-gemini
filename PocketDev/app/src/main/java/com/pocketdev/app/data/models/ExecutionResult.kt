@@ -34,8 +34,7 @@ data class AiResult(
     val isSuccess: Boolean = true,
     val errorMessage: String? = null,
     val isEdit: Boolean = false,
-    val patches: List<FilePatch> = emptyList(),
-    val confidence: String = "MEDIUM"
+    val patches: List<FilePatch> = emptyList()
 )
 
 sealed class UiState<out T> {

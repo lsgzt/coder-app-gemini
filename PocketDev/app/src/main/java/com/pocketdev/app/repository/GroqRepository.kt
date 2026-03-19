@@ -83,7 +83,6 @@ class GroqRepository {
             append(code.substring(cursorPosition))
             append("\n```\n\n")
             append("Return your response in the following format:\n")
-            append("CONFIDENCE: [HIGH/MEDIUM/LOW]\n")
             append("TYPE: [APPEND/REPLACE]\n")
             append("SUGGESTION:\n")
             append("[your suggested code]\n\n")
@@ -93,15 +92,13 @@ class GroqRepository {
         val result = callGroqWithRetry(prompt, apiKey, model, extractCode = false)
         return if (result.isSuccess) {
             val content = result.content
-            val confidenceMatch = Regex("CONFIDENCE:\\s*(HIGH|MEDIUM|LOW)").find(content)
             val typeMatch = Regex("TYPE:\\s*(APPEND|REPLACE)").find(content)
             val suggestionMatch = Regex("SUGGESTION:\\n([\\s\\S]*)").find(content)
             
-            val confidence = confidenceMatch?.groupValues?.get(1) ?: "MEDIUM"
             val type = typeMatch?.groupValues?.get(1) ?: "APPEND"
             val suggestion = suggestionMatch?.groupValues?.get(1)?.trim() ?: content.trim()
             
-            result.copy(content = suggestion, confidence = confidence, isEdit = (type == "REPLACE"))
+            result.copy(content = suggestion, isEdit = (type == "REPLACE"))
         } else {
             result
         }
@@ -118,7 +115,7 @@ class GroqRepository {
             append("3. Any important concepts used\n")
             append("4. Tips for beginners")
         }
-        return callGroqForMultiEdit(prompt, files, apiKey, model)
+        return callGroqWithRetry(prompt, apiKey, model, extractCode = false)
     }
 
     suspend fun improveCode(files: List<com.pocketdev.app.data.models.ProjectFile>, activeFileName: String, apiKey: String, model: String = "llama-3.3-70b-versatile"): AiResult {
@@ -363,8 +360,9 @@ class GroqRepository {
             } else {
                 AiResult(
                     content = content,
-                    isSuccess = false,
-                    errorMessage = "AI response did not contain valid patches."
+                    isSuccess = true,
+                    isEdit = false,
+                    errorMessage = "AI response did not contain valid patches, but here is the explanation."
                 )
             }
         } else {

@@ -17,6 +17,7 @@ class PreferencesManager(private val context: Context) {
         val KEY_TAB_SIZE = intPreferencesKey("tab_size")
         val KEY_AUTO_SAVE = booleanPreferencesKey("auto_save")
         val KEY_AUTOCOMPLETE = booleanPreferencesKey("autocomplete")
+        val KEY_GHOST_SUGGESTIONS = booleanPreferencesKey("ghost_suggestions")
         val KEY_LINE_NUMBERS = booleanPreferencesKey("line_numbers")
         val KEY_WORD_WRAP = booleanPreferencesKey("word_wrap")
         val KEY_ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
@@ -53,6 +54,10 @@ class PreferencesManager(private val context: Context) {
 
     val autocomplete: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[KEY_AUTOCOMPLETE] ?: true
+    }
+
+    val ghostSuggestions: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_GHOST_SUGGESTIONS] ?: true
     }
 
     val lineNumbers: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -103,6 +108,10 @@ class PreferencesManager(private val context: Context) {
         context.dataStore.edit { prefs -> prefs[KEY_AUTOCOMPLETE] = enabled }
     }
 
+    suspend fun setGhostSuggestions(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[KEY_GHOST_SUGGESTIONS] = enabled }
+    }
+
     suspend fun setLineNumbers(enabled: Boolean) {
         context.dataStore.edit { prefs -> prefs[KEY_LINE_NUMBERS] = enabled }
     }
@@ -150,6 +159,7 @@ class PreferencesManager(private val context: Context) {
             prefs[KEY_TAB_SIZE] = DEFAULT_TAB_SIZE
             prefs[KEY_AUTO_SAVE] = true
             prefs[KEY_AUTOCOMPLETE] = true
+            prefs[KEY_GHOST_SUGGESTIONS] = true
             prefs[KEY_LINE_NUMBERS] = true
             prefs[KEY_WORD_WRAP] = false
             prefs[KEY_AI_MODEL] = DEFAULT_AI_MODEL

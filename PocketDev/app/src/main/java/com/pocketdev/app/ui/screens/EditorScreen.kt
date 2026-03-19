@@ -4,6 +4,7 @@ import android.webkit.WebView
 import android.webkit.WebChromeClient
 import android.webkit.WebViewClient
 import android.webkit.JavascriptInterface
+import com.pocketdev.app.ui.components.MonacoEditor
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -80,6 +81,7 @@ fun EditorScreen(
     val lineNumbers by settingsViewModel.lineNumbers.collectAsState()
     val autocompleteEnabled by settingsViewModel.autocomplete.collectAsState()
     val wordWrap by settingsViewModel.wordWrap.collectAsState()
+    val theme by settingsViewModel.theme.collectAsState()
 
     var showLanguageMenu by remember { mutableStateOf(false) }
     var showAiMenu by remember { mutableStateOf(false) }
@@ -476,17 +478,15 @@ fun EditorScreen(
                     } else {
                         Box(modifier = Modifier.fillMaxSize()) {
                             val ghostSuggestion by viewModel.ghostSuggestion.collectAsState()
-                            val ghostConfidence by viewModel.ghostConfidence.collectAsState()
                             val diffSuggestion by viewModel.diffSuggestion.collectAsState()
-                            CodeEditor(
+                            MonacoEditor(
                                 code = code,
                                 language = language,
                                 fontSize = fontSize,
                                 lineNumbers = lineNumbers,
                                 wordWrap = wordWrap,
-                                autocompleteEnabled = autocompleteEnabled,
+                                theme = theme,
                                 ghostSuggestion = ghostSuggestion,
-                                ghostConfidence = ghostConfidence,
                                 onCodeChange = {
                                     viewModel.updateCode(it)
                                 },
@@ -495,20 +495,6 @@ fun EditorScreen(
                                     selection = it 
                                     if (ghostSuggestion != null || diffSuggestion != null) viewModel.rejectGhostSuggestion()
                                     viewModel.requestGhostSuggestion(it.start)
-                                },
-                                onRejectGhostSuggestion = {
-                                    viewModel.rejectGhostSuggestion()
-                                },
-                                onAcceptGhostSuggestionLine = {
-                                    val length = viewModel.acceptGhostSuggestionLine(selection.start)
-                                    selection = androidx.compose.ui.text.TextRange(selection.start + length)
-                                },
-                                onAcceptGhostSuggestionFull = {
-                                    viewModel.acceptGhostSuggestion(selection.start)
-                                    selection = androidx.compose.ui.text.TextRange(selection.start + ghostSuggestion!!.length)
-                                },
-                                onExpandGhostSuggestion = {
-                                    viewModel.expandGhostToDiff()
                                 },
                                 modifier = Modifier.fillMaxSize()
                             )
@@ -824,357 +810,7 @@ fun EditorScreen(
     }
 }
 
-@Composable
-fun CodeEditor(
-    code: String,
-    language: Language,
-    fontSize: Int,
-    lineNumbers: Boolean,
-    wordWrap: Boolean = false,
-    autocompleteEnabled: Boolean = true,
-    ghostSuggestion: String? = null,
-    ghostConfidence: String = "MEDIUM",
-    onCodeChange: (String) -> Unit,
-    selection: androidx.compose.ui.text.TextRange,
-    onSelectionChange: (androidx.compose.ui.text.TextRange) -> Unit,
-    onRejectGhostSuggestion: () -> Unit = {},
-    onAcceptGhostSuggestionLine: () -> Unit = {},
-    onAcceptGhostSuggestionFull: () -> Unit = {},
-    onExpandGhostSuggestion: () -> Unit = {},
-    modifier: Modifier = Modifier
-) {
-    var textFieldValue by remember {
-        mutableStateOf(
-            androidx.compose.ui.text.input.TextFieldValue(
-                text = code,
-                selection = selection
-            )
-        )
-    }
 
-    // Sync external code changes (e.g., loading a new file or AI edits)
-    LaunchedEffect(code) {
-        if (code != textFieldValue.text) {
-            textFieldValue = textFieldValue.copy(text = code)
-        }
-    }
-
-    // Sync external selection changes
-    LaunchedEffect(selection) {
-        if (selection != textFieldValue.selection) {
-            textFieldValue = textFieldValue.copy(selection = selection)
-        }
-    }
-
-    var highlightedCode by remember { mutableStateOf(androidx.compose.ui.text.AnnotatedString(textFieldValue.text)) }
-
-    LaunchedEffect(textFieldValue.text, language, ghostSuggestion, ghostConfidence, textFieldValue.selection) {
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            val newHighlight = SyntaxHighlighter.highlight(textFieldValue.text, language)
-            
-            if (ghostSuggestion != null) {
-                val cursor = textFieldValue.selection.start.coerceIn(0, textFieldValue.text.length)
-                val builder = androidx.compose.ui.text.AnnotatedString.Builder()
-                builder.append(newHighlight.subSequence(0, cursor))
-                
-                val alpha = when (ghostConfidence) {
-                    "HIGH" -> 0.8f
-                    "LOW" -> 0.3f
-                    else -> 0.5f // MEDIUM
-                }
-                
-                builder.withStyle(SpanStyle(color = Color.Gray.copy(alpha = alpha), fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) {
-                    append(ghostSuggestion)
-                }
-                builder.append(newHighlight.subSequence(cursor, newHighlight.length))
-                highlightedCode = builder.toAnnotatedString()
-            } else {
-                highlightedCode = newHighlight
-            }
-        }
-    }
-
-    val lineHeight = (fontSize * 1.5).sp
-    val codeTextStyle = TextStyle(
-        fontFamily = FontFamily.Monospace,
-        fontSize = fontSize.sp,
-        lineHeight = lineHeight
-    )
-
-    // Shared scroll state so line numbers scroll with code
-    val verticalScrollState = rememberScrollState()
-    val horizontalScrollState = rememberScrollState()
-
-    // Autocomplete state
-    var showAutocomplete by remember { mutableStateOf(false) }
-    var suggestions by remember { mutableStateOf<List<AutocompleteItem>>(emptyList()) }
-    var cursorRect by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
-    var lineNumberWidth by remember { mutableStateOf(0.dp) }
-
-    // Update suggestions when code changes
-    LaunchedEffect(textFieldValue.text, textFieldValue.selection, language, autocompleteEnabled) {
-        val cursorPosition = textFieldValue.selection.start
-        if (autocompleteEnabled && cursorPosition <= textFieldValue.text.length) {
-            val newSuggestions = AutocompleteEngine.getSuggestions(textFieldValue.text, cursorPosition, language)
-            suggestions = newSuggestions
-            showAutocomplete = newSuggestions.isNotEmpty()
-        } else {
-            suggestions = emptyList()
-            showAutocomplete = false
-        }
-    }
-
-    Box(modifier = modifier) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(verticalScrollState)
-        ) {
-            // Line numbers — same font size and line height as code, shared scroll
-            if (lineNumbers) {
-                val lines = textFieldValue.text.split("\n").size
-                lineNumberWidth = (maxOf(lines, 1).toString().length * fontSize * 0.6 + 12).dp
-                val lineNumbersText = (1..maxOf(lines, 1)).joinToString("\n")
-                Column(
-                    modifier = Modifier
-                        .width(lineNumberWidth)
-                        .fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(start = 2.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-                    horizontalAlignment = Alignment.End
-                ) {
-                    Text(
-                        text = lineNumbersText,
-                        style = codeTextStyle.copy(
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        ),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.End
-                    )
-                }
-            }
-
-            // Code input area
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .let {
-                        if (!wordWrap) it.horizontalScroll(horizontalScrollState) else it
-                    }
-            ) {
-                BasicTextField(
-                    value = textFieldValue,
-                    onValueChange = { tfv ->
-                        var newText = tfv.text
-                        var newSelection = tfv.selection
-                        var newCursor = newSelection.start
-                        
-                        // Auto-closing brackets
-                        if (newText.length == textFieldValue.text.length + 1 && newCursor > 0) {
-                            val insertedChar = newText[newCursor - 1]
-                            val closingChar = when (insertedChar) {
-                                '(' -> ")"
-                                '{' -> "}"
-                                '[' -> "]"
-                                '"' -> "\""
-                                '\'' -> "'"
-                                else -> null
-                            }
-                            if (closingChar != null) {
-                                newText = newText.substring(0, newCursor) + closingChar + newText.substring(newCursor)
-                                newSelection = androidx.compose.ui.text.TextRange(newCursor)
-                            }
-                        }
-                        
-                        val newTfv = androidx.compose.ui.text.input.TextFieldValue(newText, newSelection)
-                        textFieldValue = newTfv
-                        
-                        onSelectionChange(newSelection)
-                        if (newText != code) {
-                            onCodeChange(newText)
-                        }
-                    },
-                    onTextLayout = { layoutResult ->
-                        val cursorPosition = textFieldValue.selection.start.coerceIn(0, textFieldValue.text.length)
-                        cursorRect = layoutResult.getCursorRect(cursorPosition)
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp)
-                        .pointerInput(ghostSuggestion) {
-                            if (ghostSuggestion != null) {
-                                var totalDrag = 0f
-                                detectHorizontalDragGestures(
-                                    onDragStart = { totalDrag = 0f },
-                                    onDragEnd = {
-                                        if (totalDrag > 100f) {
-                                            onAcceptGhostSuggestionFull()
-                                        } else if (totalDrag > 30f) {
-                                            onAcceptGhostSuggestionLine()
-                                        } else if (totalDrag < -30f) {
-                                            onRejectGhostSuggestion()
-                                        }
-                                    }
-                                ) { change, dragAmount ->
-                                    change.consume()
-                                    totalDrag += dragAmount
-                                }
-                            }
-                        }
-                        .pointerInput(ghostSuggestion, "tap") {
-                            if (ghostSuggestion != null) {
-                                detectTapGestures(
-                                    onTap = {
-                                        onExpandGhostSuggestion()
-                                    }
-                                )
-                            }
-                        }
-                        .onKeyEvent { keyEvent ->
-                            if (keyEvent.type == KeyEventType.KeyDown) {
-                                if (keyEvent.key == Key.Tab && ghostSuggestion != null) {
-                                    val newCode = textFieldValue.text.substring(0, textFieldValue.selection.start) + ghostSuggestion!! + textFieldValue.text.substring(textFieldValue.selection.start)
-                                    onCodeChange(newCode)
-                                    val newCursor = textFieldValue.selection.start + ghostSuggestion!!.length
-                                    onSelectionChange(androidx.compose.ui.text.TextRange(newCursor))
-                                    return@onKeyEvent true
-                                }
-                                if (keyEvent.key == Key.Escape && ghostSuggestion != null) {
-                                    onRejectGhostSuggestion()
-                                    return@onKeyEvent true
-                                }
-                            }
-                            false
-                        },
-                    textStyle = codeTextStyle.copy(color = Color.Transparent),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    decorationBox = { innerTextField ->
-                        Box {
-                            // Syntax highlighted overlay
-                            Text(
-                                text = highlightedCode,
-                                style = codeTextStyle
-                            )
-                            innerTextField()
-                        }
-                    }
-                )
-            }
-        }
-
-        // Autocomplete dropdown
-        if (showAutocomplete && suggestions.isNotEmpty()) {
-            val density = androidx.compose.ui.platform.LocalDensity.current
-            val xOffset = with(density) { 
-                val baseLeft = if (lineNumbers) lineNumberWidth.toPx() else 0f
-                val paddingLeft = 8.dp.toPx()
-                val scrollX = if (!wordWrap) horizontalScrollState.value.toFloat() else 0f
-                (baseLeft + paddingLeft + cursorRect.left - scrollX).toInt() 
-            }
-            val yOffset = with(density) { 
-                val paddingTop = 8.dp.toPx()
-                (paddingTop + cursorRect.bottom - verticalScrollState.value).toInt() 
-            }
-            
-            Popup(
-                alignment = Alignment.TopStart,
-                offset = androidx.compose.ui.unit.IntOffset(xOffset, yOffset),
-                properties = PopupProperties(focusable = false)
-            ) {
-                Surface(
-                    modifier = Modifier
-                        .widthIn(min = 200.dp, max = 320.dp)
-                        .heightIn(max = 180.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    shadowElevation = 8.dp,
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 4.dp
-                ) {
-                    Column(
-                        modifier = Modifier.verticalScroll(rememberScrollState())
-                    ) {
-                        suggestions.forEach { item ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        // Insert completion: replace the prefix with the full text
-                                        val cursorPosition = textFieldValue.selection.start
-                                        val prefix = getWordPrefixForCompletion(textFieldValue.text, cursorPosition)
-                                        val before = textFieldValue.text.substring(0, cursorPosition - prefix.length)
-                                        val after = textFieldValue.text.substring(cursorPosition)
-                                        val newCode = before + item.insertText + after
-                                        
-                                        val newSelection = androidx.compose.ui.text.TextRange(cursorPosition - prefix.length + item.insertText.length + item.cursorOffset)
-                                        textFieldValue = androidx.compose.ui.text.input.TextFieldValue(newCode, newSelection)
-                                        
-                                        onCodeChange(newCode)
-                                        onSelectionChange(newSelection)
-                                        showAutocomplete = false
-                                    }
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = when (item.type) {
-                                    com.pocketdev.app.editor.CompletionType.KEYWORD -> "K"
-                                    com.pocketdev.app.editor.CompletionType.FUNCTION -> "F"
-                                    com.pocketdev.app.editor.CompletionType.METHOD -> "M"
-                                    com.pocketdev.app.editor.CompletionType.CLASS -> "C"
-                                    com.pocketdev.app.editor.CompletionType.VARIABLE -> "V"
-                                    com.pocketdev.app.editor.CompletionType.SNIPPET -> "S"
-                                    com.pocketdev.app.editor.CompletionType.TAG -> "T"
-                                    com.pocketdev.app.editor.CompletionType.PROPERTY -> "P"
-                                    com.pocketdev.app.editor.CompletionType.ATTRIBUTE -> "A"
-                                    com.pocketdev.app.editor.CompletionType.VALUE -> "V"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier
-                                    .background(
-                                        MaterialTheme.colorScheme.primaryContainer,
-                                        RoundedCornerShape(4.dp)
-                                    )
-                                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = item.text,
-                                    style = TextStyle(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Medium
-                                    ),
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = item.description,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-}
-
-
-
-private fun getWordPrefixForCompletion(code: String, cursorPos: Int): String {
-    if (cursorPos <= 0 || cursorPos > code.length) return ""
-    var start = cursorPos - 1
-    while (start >= 0 && (code[start].isLetterOrDigit() || code[start] == '_' || code[start] == '.')) {
-        start--
-    }
-    return code.substring(start + 1, cursorPos)
-}
 
 @Composable
 fun TerminalPanel(

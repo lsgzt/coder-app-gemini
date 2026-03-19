@@ -80,9 +80,6 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _ghostSuggestion = MutableStateFlow<String?>(null)
     val ghostSuggestion: StateFlow<String?> = _ghostSuggestion
 
-    private val _ghostConfidence = MutableStateFlow<String>("MEDIUM")
-    val ghostConfidence: StateFlow<String> = _ghostConfidence
-
     private val _diffSuggestion = MutableStateFlow<AiResult?>(null)
     val diffSuggestion: StateFlow<AiResult?> = _diffSuggestion
 
@@ -464,8 +461,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             val model = prefsManager.aiModel.first()
             val activeFileName = if (files.isNotEmpty()) files[_activeFileIndex.value].name else "main.py"
             val result = groqRepository.modifyCode(prompt, files, activeFileName, apiKey, model)
-            if (result.isSuccess && result.patches.isNotEmpty()) {
-                _aiState.value = UiState.Success(result.copy(isEdit = true))
+            if (result.isSuccess) {
+                if (result.patches.isNotEmpty()) {
+                    _aiState.value = UiState.Success(result.copy(isEdit = true))
+                } else {
+                    _aiState.value = UiState.Success(result.copy(isEdit = false))
+                }
             } else {
                 _aiState.value = UiState.Error(result.errorMessage ?: "AI request failed to generate patches")
             }
@@ -495,8 +496,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             val model = prefsManager.aiModel.first()
             val activeFileName = if (files.isNotEmpty()) files[_activeFileIndex.value].name else ""
             val result = groqRepository.editCode(prompt, files, activeFileName, apiKey, model)
-            if (result.isSuccess && result.patches.isNotEmpty() && result.isEdit) {
-                _aiState.value = UiState.Success(result)
+            if (result.isSuccess) {
+                if (result.patches.isNotEmpty() && result.isEdit) {
+                    _aiState.value = UiState.Success(result)
+                } else {
+                    // Show the explanation in the AiResultDialog
+                    _aiState.value = UiState.Success(result.copy(isEdit = false))
+                }
             } else {
                 _aiState.value = UiState.Error(result.errorMessage ?: "AI response did not contain valid patches")
             }
@@ -536,6 +542,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun requestGhostSuggestion(cursorPosition: Int) {
         ghostSuggestionJob?.cancel()
         ghostSuggestionJob = viewModelScope.launch {
+            if (!prefsManager.ghostSuggestions.first()) return@launch
             delay(400) // Wait for 400ms of inactivity
             val code = _currentCode.value
             val language = _currentLanguage.value
@@ -545,17 +552,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             val model = prefsManager.aiModel.first()
             val result = groqRepository.getGhostSuggestion(code, cursorPosition, language, apiKey, model)
             if (result.isSuccess && result.content.isNotBlank()) {
-                if (result.confidence == "LOW") {
-                    // Do not auto-show low confidence suggestions
-                    _ghostSuggestion.value = null
-                    _diffSuggestion.value = null
-                } else if (result.isEdit || result.content.lines().size > 2) {
+                if (result.isEdit || result.content.lines().size > 2) {
                     // Show smart diff popup for complex edits
                     _ghostSuggestion.value = null
                     _diffSuggestion.value = result
                 } else {
                     _ghostSuggestion.value = result.content
-                    _ghostConfidence.value = result.confidence
                     _diffSuggestion.value = null
                 }
             }
@@ -631,11 +633,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun expandGhostToDiff() {
         val suggestion = _ghostSuggestion.value ?: return
-        val confidence = _ghostConfidence.value
         _ghostSuggestion.value = null
         _diffSuggestion.value = AiResult(
             content = suggestion,
-            confidence = confidence,
             isEdit = false // It's an APPEND type since it was a ghost suggestion
         )
     }

@@ -26,6 +26,7 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
     val tabSize by viewModel.tabSize.collectAsState()
     val autoSave by viewModel.autoSave.collectAsState()
     val autocomplete by viewModel.autocomplete.collectAsState()
+    val ghostSuggestions by viewModel.ghostSuggestions.collectAsState()
     val lineNumbers by viewModel.lineNumbers.collectAsState()
     val wordWrap by viewModel.wordWrap.collectAsState()
     val apiKeyState by viewModel.apiKeyState.collectAsState()
@@ -316,6 +317,14 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                 subtitle = "Show code completion suggestions",
                 checked = autocomplete,
                 onCheckedChange = viewModel::setAutocomplete
+            )
+
+            SettingsSwitchItem(
+                icon = Icons.Default.Psychology,
+                title = "AI Ghost Suggestions",
+                subtitle = "Show inline AI code suggestions",
+                checked = ghostSuggestions,
+                onCheckedChange = viewModel::setGhostSuggestions
             )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))

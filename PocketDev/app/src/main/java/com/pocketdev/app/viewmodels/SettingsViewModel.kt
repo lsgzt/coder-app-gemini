@@ -28,6 +28,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val autocomplete: StateFlow<Boolean> = prefsManager.autocomplete
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
+    val ghostSuggestions: StateFlow<Boolean> = prefsManager.ghostSuggestions
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
     val lineNumbers: StateFlow<Boolean> = prefsManager.lineNumbers
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
@@ -90,6 +93,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun setAutocomplete(enabled: Boolean) {
         viewModelScope.launch { prefsManager.setAutocomplete(enabled) }
+    }
+
+    fun setGhostSuggestions(enabled: Boolean) {
+        viewModelScope.launch { prefsManager.setGhostSuggestions(enabled) }
     }
 
     fun setLineNumbers(enabled: Boolean) {

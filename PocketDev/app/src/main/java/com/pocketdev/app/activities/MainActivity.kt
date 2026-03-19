@@ -7,6 +7,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pocketdev.app.ui.navigation.AppNavigation
 import com.pocketdev.app.ui.theme.PocketDevTheme
@@ -21,12 +23,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val settingsViewModel: SettingsViewModel = viewModel()
-            val isDark = settingsViewModel.theme.let {
-                val themeVal = runBlocking { it.first() }
-                when (themeVal) {
-                    "light" -> false
-                    else -> true
-                }
+            val theme by settingsViewModel.theme.collectAsState()
+            val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
+            
+            val isDark = when (theme) {
+                "light" -> false
+                "dark" -> true
+                else -> isSystemDark
             }
 
             PocketDevTheme(darkTheme = isDark) {
