@@ -3,7 +3,7 @@ package com.pocketdev.app.api.models
 import com.google.gson.annotations.SerializedName
 
 data class ChatRequest(
-    val model: String = "llama-3.3-70b-versatile",
+    val model: String = "moonshotai/kimi-k2-instruct-0905",
     val messages: List<Message>,
     val temperature: Double = 0.7,
     @SerializedName("max_tokens")
