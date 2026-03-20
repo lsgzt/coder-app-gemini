@@ -28,6 +28,28 @@ class ExecutionManager(private val context: Context) {
         }
     }
 
+    /**
+     * Execute with real-time interactive input support via TerminalManager.
+     */
+    suspend fun executeInteractive(
+        code: String,
+        language: Language,
+        terminalManager: TerminalManager
+    ): ExecutionResult {
+        return withContext(Dispatchers.IO) {
+            when (language) {
+                Language.PYTHON -> pythonEngine.executeInteractive(code, terminalManager)
+                Language.JAVASCRIPT -> javascriptEngine.executeInteractive(code, terminalManager)
+                Language.HTML -> htmlEngine.prepare(code)
+                else -> ExecutionResult(
+                    output = "",
+                    error = "Execution is not supported for ${language.displayName}.",
+                    isSuccess = false
+                )
+            }
+        }
+    }
+
     fun isExecutable(language: Language): Boolean {
         return language in Language.executableLanguages()
     }

@@ -255,7 +255,6 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun runCode() {
         val code = _currentCode.value
         val language = _currentLanguage.value
-        val input = _stdInput.value
 
         if (code.isBlank()) {
             terminalManager.appendError("No code to execute. Write some code first!")
@@ -274,10 +273,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             terminalManager.clearTerminal()
             terminalManager.appendStatusMessage("Running script...")
             
-            val result = executionManager.execute(code, language, input)
+            // Use interactive execution for Python and JavaScript
+            val result = if (language == Language.PYTHON || language == Language.JAVASCRIPT) {
+                executionManager.executeInteractive(code, language, terminalManager)
+            } else {
+                val execResult = executionManager.execute(code, language)
+                if (execResult.isSuccess) {
+                    terminalManager.appendOutput(execResult.output)
+                }
+                execResult
+            }
 
             if (result.isSuccess) {
-                terminalManager.appendOutput(result.output)
                 terminalManager.appendStatusMessage("Execution successful.")
                 if (language == Language.HTML) {
                     _htmlContent.value = result.output
@@ -288,6 +295,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             
             _executionState.value = UiState.Success(result)
         }
+    }
+
+    fun sendTerminalInput(input: String) {
+        terminalManager.sendInput(input)
     }
 
     fun runWithAiFix() {

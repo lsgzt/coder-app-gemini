@@ -38,6 +38,10 @@ import kotlinx.coroutines.launch
 import com.pocketdev.app.ui.components.MarkdownText
 import com.pocketdev.app.ui.components.DiffViewer
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.material.icons.filled.Send
 
 import androidx.compose.ui.window.Popup
@@ -98,6 +102,15 @@ fun EditorScreen(
     var selection by remember { mutableStateOf(androidx.compose.ui.text.TextRange(0)) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    // Detect keyboard visibility
+    val density = LocalDensity.current
+    val imeInsets = WindowInsets.ime
+    val isKeyboardVisible by remember {
+        derivedStateOf {
+            imeInsets.getBottom(density) > 0
+        }
+    }
 
     // Save state notification
     LaunchedEffect(saveState) {
@@ -533,23 +546,42 @@ fun EditorScreen(
                     onShowHtml = if (language == Language.HTML && htmlContent != null) {
                         { showHtmlPreview = true }
                     } else null,
-                    onSendInput = viewModel::chatWithAi,
+                    onSendInput = { input ->
+                        val isWaiting = viewModel.terminalManager.isWaitingForInput.value
+                        if (isWaiting) {
+                            viewModel.sendTerminalInput(input)
+                        } else {
+                            viewModel.chatWithAi(input)
+                        }
+                    },
                     modifier = if (isTerminalFullScreen) Modifier.fillMaxSize() else Modifier
                 )
             }
             
-            // Special Characters Bar - appears above keyboard for quick symbol access
-            SpecialCharactersBar(
-                onCharacterClick = { char ->
-                    // Insert character at cursor position
-                    val currentCode = viewModel.currentCode.value
-                    val cursorPos = selection.start
-                    val newCode = currentCode.substring(0, cursorPos) + char + currentCode.substring(cursorPos)
-                    viewModel.updateCode(newCode)
-                    // Move cursor after inserted character
-                    selection = androidx.compose.ui.text.TextRange(cursorPos + char.length)
-                }
-            )
+            // Special Characters Bar - only visible when keyboard is open
+            if (isKeyboardVisible) {
+                SpecialCharactersBar(
+                    onCharacterClick = { char ->
+                        val currentCode = viewModel.currentCode.value
+                        val cursorPos = selection.start
+                        
+                        // Auto-close brackets and quotes
+                        val (insertText, cursorOffset) = when (char) {
+                            "(" -> "()" to 1
+                            "{" -> "{}" to 1
+                            "[" -> "[]" to 1
+                            "\"" -> "\"\"" to 1
+                            "'" -> "''" to 1
+                            "<" -> "<>" to 1
+                            else -> char to char.length
+                        }
+                        
+                        val newCode = currentCode.substring(0, cursorPos) + insertText + currentCode.substring(cursorPos)
+                        viewModel.updateCode(newCode)
+                        selection = androidx.compose.ui.text.TextRange(cursorPos + cursorOffset)
+                    }
+                )
+            }
         }
     }
 
@@ -1243,6 +1275,7 @@ fun TerminalPanel(
                         com.pocketdev.app.execution.TerminalMessageType.ERROR -> Color(0xFFEF9A9A)
                         com.pocketdev.app.execution.TerminalMessageType.AGENT -> Color(0xFF81C784)
                         com.pocketdev.app.execution.TerminalMessageType.STATUS -> Color(0xFF64B5F6)
+                        com.pocketdev.app.execution.TerminalMessageType.INPUT_PROMPT -> Color(0xFFFFD54F)
                     }
                     Text(
                         text = msg.text,
@@ -1311,8 +1344,9 @@ fun TerminalPanel(
                             ),
                             decorationBox = { innerTextField ->
                                 if (inputText.isEmpty()) {
+                                    val isWaiting = terminalManager.isWaitingForInput.collectAsState().value
                                     Text(
-                                        "Type input here...",
+                                        if (isWaiting) "Enter input for script..." else "Type input here...",
                                         style = TextStyle(
                                             fontFamily = FontFamily.Monospace,
                                             fontSize = 13.sp,
