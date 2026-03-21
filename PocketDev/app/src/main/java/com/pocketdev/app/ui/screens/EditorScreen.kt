@@ -5,6 +5,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebViewClient
 import android.webkit.JavascriptInterface
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -191,19 +192,22 @@ fun EditorScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
+                    Column(modifier = Modifier.padding(0.dp)) {
                         Text(
                             text = projectName,
                             style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1
+                            maxLines = 1,
+                            fontWeight = FontWeight.SemiBold
                         )
                         Text(
                             text = "${language.icon} ${language.displayName}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 11.sp
                         )
                     }
                 },
+                modifier = Modifier.height(56.dp),
                 actions = {
                     // Language Selector
                     Box {
@@ -372,25 +376,36 @@ fun EditorScreen(
         },
         floatingActionButton = {
             if (language in Language.executableLanguages()) {
-                Column(horizontalAlignment = Alignment.End) {
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    modifier = Modifier.padding(8.dp)
+                ) {
                     SmallFloatingActionButton(
                         onClick = { 
                             showTerminal = true
                             viewModel.runWithAiFix() 
                         },
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        containerColor = MaterialTheme.colorScheme.secondary,
+                        elevation = FloatingActionButtonDefaults.elevation(
+                            defaultElevation = 8.dp,
+                            pressedElevation = 12.dp
+                        )
                     ) {
-                        Icon(Icons.Default.AutoFixHigh, "Run with AI Fix")
+                        Icon(Icons.Default.AutoFixHigh, "Run with AI Fix", tint = MaterialTheme.colorScheme.onSecondary)
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
                     FloatingActionButton(
                         onClick = { 
                             showTerminal = true
                             viewModel.runCode() 
                         },
-                        containerColor = MaterialTheme.colorScheme.primary
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        elevation = FloatingActionButtonDefaults.elevation(
+                            defaultElevation = 12.dp,
+                            pressedElevation = 16.dp
+                        )
                     ) {
-                        Icon(Icons.Default.PlayArrow, "Run Code")
+                        Icon(Icons.Default.PlayArrow, "Run Code", tint = MaterialTheme.colorScheme.onPrimary)
                     }
                 }
             }
@@ -559,7 +574,11 @@ fun EditorScreen(
             }
             
             // Special Characters Bar - only visible when keyboard is open
-            if (isKeyboardVisible) {
+            AnimatedVisibility(
+                visible = isKeyboardVisible,
+                enter = slideInVertically(initialOffsetY = { it }, animationSpec = tween(150)),
+                exit = slideOutVertically(targetOffsetY = { it }, animationSpec = tween(150))
+            ) {
                 SpecialCharactersBar(
                     onCharacterClick = { char ->
                         val currentCode = viewModel.currentCode.value
@@ -807,10 +826,15 @@ fun CodeEditor(
     }
 
     var highlightedCode by remember { mutableStateOf(androidx.compose.ui.text.AnnotatedString(textFieldValue.text)) }
+    
+    // Memoized syntax highlighting to reduce recomputation
+    val memoizedHighlight = remember(textFieldValue.text, language) {
+        SyntaxHighlighter.highlight(textFieldValue.text, language)
+    }
 
     LaunchedEffect(textFieldValue.text, language, ghostSuggestion, inlineDiffSuggestion, textFieldValue.selection) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            val newHighlight = SyntaxHighlighter.highlight(textFieldValue.text, language)
+            val newHighlight = memoizedHighlight
             
             if (ghostSuggestion != null) {
                 // Simple APPEND type - show in gray
@@ -863,12 +887,15 @@ fun CodeEditor(
         }
     }
 
+    // Memoized text style to prevent unnecessary recomposition
     val lineHeight = (fontSize * 1.5).sp
-    val codeTextStyle = TextStyle(
-        fontFamily = FontFamily.Monospace,
-        fontSize = fontSize.sp,
-        lineHeight = lineHeight
-    )
+    val codeTextStyle = remember(fontSize) {
+        TextStyle(
+            fontFamily = FontFamily.Monospace,
+            fontSize = fontSize.sp,
+            lineHeight = lineHeight
+        )
+    }
 
     // Shared scroll state so line numbers scroll with code
     val verticalScrollState = rememberScrollState()
@@ -884,17 +911,19 @@ fun CodeEditor(
     var visualLineCount by remember { mutableStateOf(1) }
     var lineIndexToNumber by remember { mutableStateOf(mapOf<Int, Int>()) }
 
-    // Update suggestions when code changes
-    LaunchedEffect(textFieldValue.text, textFieldValue.selection, language, autocompleteEnabled) {
-        val cursorPosition = textFieldValue.selection.start
-        if (autocompleteEnabled && cursorPosition <= textFieldValue.text.length) {
-            val newSuggestions = AutocompleteEngine.getSuggestions(textFieldValue.text, cursorPosition, language)
-            suggestions = newSuggestions
-            showAutocomplete = newSuggestions.isNotEmpty()
+    // Memoized suggestions to reduce computation
+    val memoizedSuggestions = remember(textFieldValue.text, textFieldValue.selection.start, language, autocompleteEnabled) {
+        if (autocompleteEnabled && textFieldValue.selection.start <= textFieldValue.text.length) {
+            AutocompleteEngine.getSuggestions(textFieldValue.text, textFieldValue.selection.start, language)
         } else {
-            suggestions = emptyList()
-            showAutocomplete = false
+            emptyList()
         }
+    }
+
+    // Update suggestions when code changes
+    LaunchedEffect(memoizedSuggestions) {
+        suggestions = memoizedSuggestions
+        showAutocomplete = memoizedSuggestions.isNotEmpty()
     }
 
     // Track visual line count for word wrap mode
@@ -1220,47 +1249,51 @@ fun TerminalPanel(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .then(if (!isFullScreen) Modifier.heightIn(min = 100.dp, max = maxHeight) else Modifier),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        tonalElevation = 4.dp
+            .then(if (!isFullScreen) Modifier.heightIn(min = 100.dp, max = maxHeight) else Modifier)
+            .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 8.dp,
+        shadowElevation = 4.dp
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Header
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     Icons.Default.Terminal,
                     contentDescription = null,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(18.dp),
                     tint = MaterialTheme.colorScheme.primary
                 )
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(
                     "Terminal",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold
                 )
                 Spacer(Modifier.weight(1f))
                 if (onShowHtml != null) {
-                    TextButton(onClick = onShowHtml, modifier = Modifier.height(28.dp)) {
+                    TextButton(onClick = onShowHtml, modifier = Modifier.height(32.dp)) {
                         Text("Preview HTML", style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                IconButton(onClick = onToggleFullScreen, modifier = Modifier.size(28.dp)) {
-                    Icon(if (isFullScreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, "Toggle Fullscreen", modifier = Modifier.size(16.dp))
+                IconButton(onClick = onToggleFullScreen, modifier = Modifier.size(32.dp)) {
+                    Icon(if (isFullScreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, "Toggle Fullscreen", modifier = Modifier.size(18.dp))
                 }
-                IconButton(onClick = onClear, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Delete, "Clear terminal", modifier = Modifier.size(16.dp))
+                IconButton(onClick = onClear, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Delete, "Clear terminal", modifier = Modifier.size(18.dp))
                 }
-                IconButton(onClick = onClose, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Close, "Close terminal", modifier = Modifier.size(16.dp))
+                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Close, "Close terminal", modifier = Modifier.size(18.dp))
                 }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), thickness = 0.5.dp)
 
             Column(
                 modifier = Modifier
@@ -1270,19 +1303,20 @@ fun TerminalPanel(
                     .padding(12.dp)
             ) {
                 messages.forEach { msg ->
-                    val color = when (msg.type) {
-                        com.pocketdev.app.execution.TerminalMessageType.NORMAL -> MaterialTheme.colorScheme.onSurface
-                        com.pocketdev.app.execution.TerminalMessageType.ERROR -> Color(0xFFEF9A9A)
-                        com.pocketdev.app.execution.TerminalMessageType.AGENT -> Color(0xFF81C784)
-                        com.pocketdev.app.execution.TerminalMessageType.STATUS -> Color(0xFF64B5F6)
-                        com.pocketdev.app.execution.TerminalMessageType.INPUT_PROMPT -> Color(0xFFFFD54F)
+                    val (color, fontWeight) = when (msg.type) {
+                        com.pocketdev.app.execution.TerminalMessageType.NORMAL -> MaterialTheme.colorScheme.onSurface to FontWeight.Normal
+                        com.pocketdev.app.execution.TerminalMessageType.ERROR -> DarkThemeColors.error to FontWeight.SemiBold
+                        com.pocketdev.app.execution.TerminalMessageType.AGENT -> DarkThemeColors.success to FontWeight.Medium
+                        com.pocketdev.app.execution.TerminalMessageType.STATUS -> DarkThemeColors.primary to FontWeight.Medium
+                        com.pocketdev.app.execution.TerminalMessageType.INPUT_PROMPT -> DarkThemeColors.tertiary to FontWeight.Medium
                     }
                     Text(
                         text = msg.text,
                         style = TextStyle(
                             fontFamily = FontFamily.Monospace,
                             fontSize = 13.sp,
-                            color = color
+                            color = color,
+                            fontWeight = fontWeight
                         ),
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
@@ -1293,8 +1327,9 @@ fun TerminalPanel(
                         style = TextStyle(
                             fontFamily = FontFamily.Monospace,
                             fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                        )
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        ),
+                        modifier = Modifier.padding(vertical = 8.dp)
                     )
                 }
             }
@@ -1303,21 +1338,26 @@ fun TerminalPanel(
             if (onSendInput != null) {
                 var inputText by remember { mutableStateOf("") }
                 Surface(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
                     color = MaterialTheme.colorScheme.surface
                 ) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), thickness = 0.5.dp)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
                             text = ">",
                             style = TextStyle(
                                 fontFamily = FontFamily.Monospace,
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.primary
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
                             ),
                             modifier = Modifier.padding(end = 4.dp)
                         )
@@ -1329,7 +1369,9 @@ fun TerminalPanel(
                                 fontSize = 13.sp,
                                 color = MaterialTheme.colorScheme.onSurface
                             ),
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(vertical = 4.dp),
                             singleLine = true,
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                                 imeAction = androidx.compose.ui.text.input.ImeAction.Send
@@ -1346,11 +1388,11 @@ fun TerminalPanel(
                                 if (inputText.isEmpty()) {
                                     val isWaiting = terminalManager.isWaitingForInput.collectAsState().value
                                     Text(
-                                        if (isWaiting) "Enter input for script..." else "Type input here...",
+                                        if (isWaiting) "Enter input..." else "Type here...",
                                         style = TextStyle(
                                             fontFamily = FontFamily.Monospace,
                                             fontSize = 13.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                                         )
                                     )
                                 }
@@ -1364,9 +1406,9 @@ fun TerminalPanel(
                                     inputText = ""
                                 }
                             },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(36.dp)
                         ) {
-                            Icon(Icons.Default.Send, "Send", modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Send, "Send", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
                         }
                     }
                 }
@@ -1385,34 +1427,52 @@ fun FindReplaceBar(
     onClose: () -> Unit
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.fillMaxWidth()
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)),
+        tonalElevation = 4.dp,
+        shadowElevation = 2.dp
     ) {
-        Column(modifier = Modifier.padding(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedTextField(
                     value = findText,
                     onValueChange = onFindChange,
                     placeholder = { Text("Find", style = MaterialTheme.typography.bodySmall) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp),
                     singleLine = true,
-                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                    shape = RoundedCornerShape(6.dp)
                 )
-                Spacer(Modifier.width(4.dp))
                 OutlinedTextField(
                     value = replaceText,
                     onValueChange = onReplaceChange,
                     placeholder = { Text("Replace", style = MaterialTheme.typography.bodySmall) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp),
                     singleLine = true,
-                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                    shape = RoundedCornerShape(6.dp)
                 )
-                Spacer(Modifier.width(4.dp))
-                Button(onClick = onReplace, modifier = Modifier.height(48.dp)) {
-                    Text("Replace")
+                Button(
+                    onClick = onReplace,
+                    modifier = Modifier.height(40.dp),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text("Replace", style = MaterialTheme.typography.labelMedium)
                 }
-                IconButton(onClick = onClose) {
-                    Icon(Icons.Default.Close, "Close")
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(Icons.Default.Close, "Close", modifier = Modifier.size(18.dp))
                 }
             }
         }
@@ -1847,40 +1907,40 @@ fun SpecialCharactersBar(
     )
     
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 4.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            specialChars.forEach { char ->
-                Box(
-                    modifier = Modifier
-                        .clickable { onCharacterClick(char) }
-                        .background(
-                            MaterialTheme.colorScheme.surfaceVariant,
-                            RoundedCornerShape(4.dp)
-                        )
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = char,
-                        style = TextStyle(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        }
-    }
+	modifier = Modifier
+	.fillMaxWidth()
+	.background(MaterialTheme.colorScheme.surface)
+	) {
+	Row(
+	modifier = Modifier
+	.fillMaxWidth()
+	.horizontalScroll(rememberScrollState())
+	.padding(horizontal = 4.dp, vertical = 4.dp),
+	horizontalArrangement = Arrangement.spacedBy(1.dp),
+	verticalAlignment = Alignment.CenterVertically
+	) {
+	specialChars.forEach { char ->
+	Box(
+	modifier = Modifier
+	.clickable { onCharacterClick(char) }
+	.background(
+	MaterialTheme.colorScheme.surfaceVariant,
+	RoundedCornerShape(3.dp)
+	)
+	.padding(horizontal = 8.dp, vertical = 4.dp),
+	contentAlignment = Alignment.Center
+	) {
+	Text(
+	text = char,
+	style = TextStyle(
+	fontFamily = FontFamily.Monospace,
+	fontSize = 12.sp,
+	fontWeight = FontWeight.Medium
+	),
+	color = MaterialTheme.colorScheme.onSurface
+	)
+	}
+	}
+	}
+	}
 }
